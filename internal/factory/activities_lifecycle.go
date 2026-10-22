@@ -75,11 +75,11 @@ func (a *Activities) WriteInventory(ctx context.Context, in WriteInventoryInput)
 	}
 	store, err := a.artifactFactory.ForRun(in.RunID)
 	if err != nil {
-		out.EvidenceError = err.Error()
+		out.EvidenceError = a.redactor.Redact(err.Error())
 		return out, nil
 	}
 	if err := store.Write(ArtifactInventory, data); err != nil {
-		out.EvidenceError = err.Error()
+		out.EvidenceError = a.redactor.Redact(err.Error())
 	}
 	a.log.InfoContext(ctx, "sandbox inventory written",
 		slog.String("run.id", in.RunID),
