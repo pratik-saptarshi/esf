@@ -88,7 +88,10 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	json.Unmarshal(payload["model"], &model)
 	// Text tokenization is bounded conservatively by encoded request bytes plus
 	// protocol framing. Images/audio/video and token-expanding custom fields are
-	// unsupported. Only a qualified tokenizer/provider route may use this bound.
+	// unsupported; media is rejected below at content-part parsing, not by
+	// matching field names in the raw body (tool/response JSON schemas may
+	// legitimately name string properties e.g. "image_url"). Only a qualified
+	// tokenizer/provider route may use this bound.
 	allowed := map[string]bool{"model": true, "messages": true, "tools": true, "tool_choice": true, "parallel_tool_calls": true, "temperature": true, "top_p": true, "stream": true, "stream_options": true, "max_tokens": true, "max_completion_tokens": true, "stop": true, "presence_penalty": true, "frequency_penalty": true, "seed": true, "response_format": true, "reasoning_effort": true, "store": true}
 	for k := range payload {
 		if !allowed[k] {
@@ -101,7 +104,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	payload["store"] = json.RawMessage(`false`)
-	if model != a.Model || g.Model != "" && model != g.Model || int64(len(body))+4096 > a.MaxInputTokens || bytes.Contains(body, []byte(`"image_url"`)) || bytes.Contains(body, []byte(`"input_audio"`)) || bytes.Contains(body, []byte(`"video_url"`)) {
+	if model != a.Model || g.Model != "" && model != g.Model || int64(len(body))+4096 > a.MaxInputTokens {
 		http.Error(w, "model or input token bound rejected", 400)
 		return
 	}

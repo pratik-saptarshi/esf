@@ -210,7 +210,7 @@ func TestGatewayRejectsUnqualifiedRequestBeforeForwarding(t *testing.T) {
 	a := account()
 	l.Create(a)
 	g := &Gateway{Ledger: l, TokenKey: []byte(strings.Repeat("s", 32))}
-	for _, body := range []string{`{"model":"different","messages":[]}`, `{"model":"test-model","messages":[{"content":[{"type":"image_url","image_url":"x"}]}]}`, `{"model":"test-model","messages":[],"unknown":true}`, `{"model":"test-model","messages":[{"role":"user","content":"hello"}],"store":true}`} {
+	for _, body := range []string{`{"model":"different","messages":[]}`, `{"model":"test-model","messages":[{"content":[{"type":"image_url","image_url":"x"}]}]}`, `{"model":"test-model","messages":[{"content":[{"type":"input_audio","input_audio":"x"}]}]}`, `{"model":"test-model","messages":[{"content":[{"type":"video_url","video_url":"x"}]}]}`, `{"model":"test-model","messages":[],"unknown":true}`, `{"model":"test-model","messages":[{"role":"user","content":"hello"}],"store":true}`} {
 		r := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
 		r.Header.Set("Authorization", "Bearer "+Token(g.TokenKey, a.ID))
 		w := httptest.NewRecorder()
@@ -222,5 +222,43 @@ func TestGatewayRejectsUnqualifiedRequestBeforeForwarding(t *testing.T) {
 	got, _ := l.Get(a.ID)
 	if len(got.Calls) != 0 {
 		t.Fatal("invalid requests consumed reservations")
+	}
+}
+
+func TestGatewayAllowsMediaFieldNamesInToolSchemas(t *testing.T) {
+	l, _ := Open(t.TempDir())
+	defer l.Close()
+	a := account()
+	l.Create(a)
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5}}`)
+	}))
+	defer up.Close()
+	g := &Gateway{Ledger: l, TokenKey: []byte(strings.Repeat("k", 32)), Upstream: up.URL, UpstreamKey: "provider-secret", Client: up.Client()}
+	srv := httptest.NewServer(g)
+	defer srv.Close()
+	// Text-only requests whose tool/response JSON schemas legitimately name a
+	// string property "image_url", "input_audio" or "video_url". Zero media
+	// content anywhere — the gateway must not reject these with 400.
+	template := `{"model":"test-model","messages":[{"role":"user","content":"hello"}],"tools":[{"type":"function","function":{"name":"fetch","parameters":{"type":"object","properties":{"image_url":{"type":"string"}}}}}]}`
+	for _, field := range []string{"image_url", "input_audio", "video_url"} {
+		body := strings.Replace(template, "image_url", field, 1)
+		r, e := http.NewRequest("POST", srv.URL+"/v1/chat/completions", strings.NewReader(body))
+		if e != nil {
+			t.Fatal(e)
+		}
+		r.Header.Set("Authorization", "Bearer "+Token(g.TokenKey, a.ID))
+		resp, e := srv.Client().Do(r)
+		if e != nil {
+			t.Fatal(e)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode == 400 {
+			t.Fatalf("field %q: text-only request rejected: %s", field, b)
+		}
+		if resp.StatusCode != 200 {
+			t.Fatalf("field %q: expected 200, got %d: %s", field, resp.StatusCode, b)
+		}
 	}
 }
