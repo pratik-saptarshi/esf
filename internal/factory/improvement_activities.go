@@ -725,7 +725,20 @@ func (a *Activities) materializeImprovementSelection(ctx context.Context, sb san
 		return RunAgentOutput{}, errors.New("selected patch could not be materialized")
 	}
 	result := agentharness.Result{Harness: in.Harness, Executable: "factory:selected-patch", Model: m.Model, Version: m.AgentVersion, ExitCode: 0, StartedAt: time.Now(), CompletedAt: time.Now()}
-	return RunAgentOutput{Result: result, Attempt: 1}, a.writeJSON(store, ArtifactAgentResult, map[string]any{"result": result, "selected_run": in.SelectedRun})
+	// No agent executes on the selection path, so stdout/stderr are empty by
+	// nature; persist them as explicit markers along with the original prompt,
+	// which ADR 0005 requires for reconstructing what a run was asked to do.
+	evidenceErr := errors.Join(
+		store.Write(ArtifactAgentStdout, a.redactBytesString("")),
+		store.Write(ArtifactAgentStderr, a.redactBytesString("")),
+		store.Write(ArtifactAgentPrompt, a.redactBytesString(in.Prompt)),
+		a.writeJSON(store, ArtifactAgentResult, map[string]any{"result": result, "selected_run": in.SelectedRun}),
+	)
+	evidenceError := ""
+	if evidenceErr != nil {
+		evidenceError = a.redactor.Redact(evidenceErr.Error())
+	}
+	return RunAgentOutput{Result: result, Attempt: 1, EvidenceError: evidenceError}, nil
 }
 func (a *Activities) FinalizeImprovementFailure(ctx context.Context, in ImprovementFinish) (RunManifest, error) {
 	m := RunManifest{RunID: in.Admission.Request.RunID, FactoryVersion: a.cfg.effectiveVersion(), Scope: in.Admission.Binding.Scope, Repository: in.Admission.Binding.Repository, RequestedRevision: in.Admission.Request.Revision, AgentHarness: in.Admission.Request.AgentHarness, FactoryResult: StateInfrastructureFailed, AgentResult: OutcomeSkipped, VerificationResult: OutcomeSkipped, Improvement: &in.Receipt, Error: in.Receipt.Error}

@@ -229,3 +229,69 @@ func TestSuiteRejectsContaminatedPartitions(t *testing.T) {
 		t.Fatal("normalized duplicate crossed partitions")
 	}
 }
+
+func TestMaterializeImprovementSelectionWritesAgentEvidence(t *testing.T) {
+	ctx := context.Background()
+	store, _ := artifacts.NewLocal(t.TempDir())
+	a := &Activities{artifactFactory: store, redactor: NewRedactor(), cfg: Config{}}
+
+	const parent, sel = "parent", "sel"
+	const prompt = "implement the widget"
+
+	// Selected run manifest with a real patch, so checkEvidenceComplete passes.
+	patch := []byte("diff --git a/f b/f\n")
+	selStore, _ := store.ForRun(sel)
+	if e := selStore.Write(ArtifactPatch, patch); e != nil {
+		t.Fatal(e)
+	}
+	if e := selStore.Write(ArtifactRun, receiptBytes(RunManifest{RunID: sel, Patch: ArtifactPatch})); e != nil {
+		t.Fatal(e)
+	}
+
+	// Parent run: selection receipt, admission, selected patch + digest.
+	digest := harnessprofile.Hash(string(patch))
+	parentStore, _ := store.ForRun(parent)
+	writes := map[string][]byte{
+		"improvement/receipt.json":         receiptBytes(ImprovementReceipt{SelectedRun: sel, SelectedPatchDigest: digest}),
+		"improvement/admission.json":       receiptBytes(ImprovementAdmission{Fingerprint: a.cfg.improvementFingerprint()}),
+		"improvement/selected.patch":       patch,
+		"improvement/selected-digest.json": receiptBytes(digest),
+	}
+	for path, data := range writes {
+		if e := parentStore.Write(path, data); e != nil {
+			t.Fatal(e)
+		}
+	}
+
+	provider := sandbox.NewFake()
+	sb, err := provider.Create(ctx, sandbox.Spec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := a.materializeImprovementSelection(ctx, sb, RunAgentInput{
+		RunID: "parent", ImprovementParent: "parent", SelectedRun: "sel",
+		Harness: "opencode2", Prompt: prompt, RepositoryDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("materialize: %v", err)
+	}
+	if out.EvidenceError != "" {
+		t.Fatalf("EvidenceError: %s", out.EvidenceError)
+	}
+	for path, want := range map[string]string{
+		ArtifactAgentPrompt: prompt,
+		ArtifactAgentStdout: "",
+		ArtifactAgentStderr: "",
+	} {
+		got, err := parentStore.Read(path)
+		if err != nil {
+			t.Fatalf("missing %s: %v", path, err)
+		}
+		if string(got) != want {
+			t.Fatalf("%s = %q, want %q", path, got, want)
+		}
+	}
+	if _, err := parentStore.Read(ArtifactAgentResult); err != nil {
+		t.Fatalf("missing %s: %v", ArtifactAgentResult, err)
+	}
+}
