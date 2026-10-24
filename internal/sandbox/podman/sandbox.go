@@ -240,11 +240,26 @@ func resolveInRootfs(rootfs, path string) (string, error) {
 				current = rootfs
 				rest = strings.TrimPrefix(filepath.Clean(target), "/") + slashJoin(rest)
 			} else {
-				resolved := filepath.Join(current, target)
-				if !isUnder(rootfs, resolved) {
+				// Restart traversal from the rootfs with the target's
+				// components — resolved against the link's parent
+				// directory — prepended to the remaining path. Assigning
+				// the joined target to current directly would leave its
+				// intermediate components un-walked: if one of them is
+				// itself a symlink, the kernel would resolve it on the
+				// host when the returned path is opened, escaping the
+				// rootfs even though the joined path looks contained.
+				rel, err := filepath.Rel(rootfs, current)
+				if err != nil {
+					return "", fmt.Errorf("resolve sandbox path %q: %w", path, err)
+				}
+				joined := filepath.Join(rel, target)
+				if joined == ".." || strings.HasPrefix(joined, ".."+string(os.PathSeparator)) {
 					return "", fmt.Errorf("%w: sandbox path %q escapes the rootfs via symlink", ErrInvalidSpec, path)
 				}
-				current = resolved
+				current = rootfs
+				if joined != "." {
+					rest = joined + slashJoin(rest)
+				}
 			}
 			continue
 		}

@@ -82,6 +82,17 @@ func readState(dir string) (sandboxState, error) {
 // that would escape dest (absolute paths, "..", escaping symlink/hardlink
 // targets) are rejected: the tar comes from a local image, but a hostile
 // or corrupted image must not write outside the sandbox rootfs.
+//
+// Every path handed to a filesystem write is first resolved with
+// resolveInRootfs, which walks each component and expands symlinks —
+// including symlinks planted by earlier tar entries — as rootfs-relative.
+// The path actually opened therefore contains no un-walked symlink
+// component for the host kernel to follow out of dest: a tar carrying
+// `bin -> /some/host/dir` followed by a regular entry `bin/<file>` writes
+// to dest's rootfs-relative interpretation of that target, never through
+// the planted host symlink. Link entries themselves are placed via
+// linkLocation, which resolves only the parent chain and appends the
+// final component verbatim, so the link is created, not followed.
 func extractRootfs(r io.Reader, dest string) error {
 	tr := tar.NewReader(r)
 	for {
@@ -92,16 +103,20 @@ func extractRootfs(r io.Reader, dest string) error {
 		if err != nil {
 			return fmt.Errorf("read image export: %w", err)
 		}
-		target, err := joinUnder(dest, hdr.Name)
-		if err != nil {
-			return err
-		}
 		switch hdr.Typeflag {
 		case tar.TypeDir:
+			target, err := resolveInRootfs(dest, rootfsPath(hdr.Name))
+			if err != nil {
+				return err
+			}
 			if err := os.MkdirAll(target, fsMode(hdr.Mode, 0o755)); err != nil {
 				return fmt.Errorf("create rootfs dir %s: %w", hdr.Name, err)
 			}
 		case tar.TypeReg:
+			target, err := resolveInRootfs(dest, rootfsPath(hdr.Name))
+			if err != nil {
+				return err
+			}
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return err
 			}
@@ -117,6 +132,10 @@ func extractRootfs(r io.Reader, dest string) error {
 				return err
 			}
 		case tar.TypeSymlink:
+			target, err := linkLocation(dest, hdr.Name)
+			if err != nil {
+				return err
+			}
 			if err := checkLinkTarget(dest, target, hdr.Linkname); err != nil {
 				return err
 			}
@@ -128,7 +147,11 @@ func extractRootfs(r io.Reader, dest string) error {
 				return fmt.Errorf("create rootfs symlink %s: %w", hdr.Name, err)
 			}
 		case tar.TypeLink:
-			src, err := joinUnder(dest, hdr.Linkname)
+			src, err := resolveInRootfs(dest, rootfsPath(hdr.Linkname))
+			if err != nil {
+				return err
+			}
+			target, err := linkLocation(dest, hdr.Name)
 			if err != nil {
 				return err
 			}
@@ -145,6 +168,38 @@ func extractRootfs(r io.Reader, dest string) error {
 			continue
 		}
 	}
+}
+
+// rootfsPath renders a tar entry name as the absolute in-rootfs path
+// resolveInRootfs expects.
+func rootfsPath(name string) string {
+	return "/" + strings.TrimPrefix(name, "/")
+}
+
+// linkLocation returns the host path at which a symlink or hardlink
+// entry itself must be created: the parent directory is resolved with
+// full symlink expansion (resolveInRootfs) and the final component is
+// appended verbatim, so the link is placed at a walked location rather
+// than followed through a previously planted symlink.
+func linkLocation(root, name string) (string, error) {
+	clean := strings.TrimPrefix(filepath.Clean(rootfsPath(name)), "/")
+	dir, base := filepath.Split(clean)
+	if base == "" || base == "." {
+		return "", fmt.Errorf("%w: image entry %q has no final component", ErrInvalidSpec, name)
+	}
+	parent := root
+	if dir != "" {
+		resolved, err := resolveInRootfs(root, "/"+strings.TrimSuffix(dir, "/"))
+		if err != nil {
+			return "", err
+		}
+		parent = resolved
+	}
+	target := filepath.Join(parent, base)
+	if !isUnder(root, target) {
+		return "", fmt.Errorf("%w: image entry %q escapes the sandbox rootfs", ErrInvalidSpec, name)
+	}
+	return target, nil
 }
 
 // joinUnder joins name onto root and rejects anything escaping root.
