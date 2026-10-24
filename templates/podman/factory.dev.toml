@@ -1,0 +1,69 @@
+# Development / acceptance configuration for the podman provider E2E
+# (scripts/podman-e2e.sh renders this file, substituting __HOME__ and
+# __RUN_DIR__). Not a production config.
+schema_version = 1
+
+[sandbox]
+provider = "auto"
+base_packages = []
+
+# Configured but UNREACHABLE on purpose: auto mode must probe cube,
+# watch it fail, and select podman. 127.0.0.1:18443 is a dead endpoint.
+[cube]
+api_url = "http://127.0.0.1:18443"
+template_id = "tpl-spike-nonexistent"
+proxy_node_ip = "127.0.0.1"
+proxy_port_http = 18443
+proxy_scheme = "http"
+
+[podman]
+image = "localhost/esf-template:debian13-node24"
+network = "host"
+cgroup_manager = "cgroupfs"
+storage_root = "__HOME__/.local/share/containers/storage"
+run_root = "__HOME__/.local/share/containers/runroot"
+state_dir = "__RUN_DIR__/podman-sandboxes"
+
+[temporal]
+host_port = "127.0.0.1:7233"
+namespace = "default"
+task_queue = "factory"
+
+[storage]
+data_dir = "__RUN_DIR__/data"
+
+# The credential-free conformance harness from the e2e fixture
+# (testdata/e2e-repo/.factory-agent.sh). NOTE: no `binary` key —
+# setting one makes BuildHarnesses auto-add a `--version` verification
+# the fixture script does not support.
+[harnesses.conformance]
+type = "generic"
+executable = "./.factory-agent.sh"
+prompt_mode = "stdin_file"
+timeout = "5m"
+
+[verification.default]
+name = "default"
+
+[[verification.default.steps]]
+id = "build"
+argv = ["./build.sh"]
+mandatory = true
+timeout = "10m"
+description = "repository build script"
+
+[[verification.default.steps]]
+id = "unit-tests"
+argv = ["./test.sh"]
+mandatory = true
+timeout = "10m"
+description = "repository test script"
+
+# The conformance harness is unmanaged (no provider egress controls);
+# acknowledge the open-egress posture explicitly rather than disabling
+# the probe.
+[hardening]
+acknowledge_open_egress = true
+
+[repositories]
+allowed = []
