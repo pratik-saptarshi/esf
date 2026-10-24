@@ -1,11 +1,17 @@
 package factory
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/mitkox/esf/internal/sandbox"
 	"github.com/mitkox/esf/internal/sandbox/cube"
@@ -165,6 +171,72 @@ func TestResolveSandboxProviderRejectsCubeEgressOnPodman(t *testing.T) {
 	cfgCube.Harnesses = cfg.Harnesses
 	if _, _, err := resolveSandboxProvider(context.Background(), cfgCube, nil, &fakeProber{}); err != nil {
 		t.Fatalf("cube + cube_egress resolve = %v, want nil", err)
+	}
+}
+
+// Regression (Task 5 fix round 1): the resolver must propagate the
+// runtime logger into constructed providers — the pre-resolver worker
+// built cube with cube.WithLogger(log). Without propagation cube falls
+// back to a discard logger (every provider log line silently lost) and
+// podman to slog.Default(), ignoring a custom runtime logger.
+//
+// Podman seam (behavioral): List warns on unreadable sandbox state
+// through the provider's logger, with no podman binary or Ping needed.
+func TestResolveSandboxProviderPropagatesLoggerToPodman(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	cfg := resolverConfig("podman")
+	stateDir := t.TempDir()
+	cfg.Podman.StateDir = stateDir
+	// A validly-named sandbox dir with no spec.json: readState fails and
+	// List logs the skip through the provider's logger.
+	bad := filepath.Join(stateDir, "podman-0123456789abcdef0123456789abcdef")
+	if err := os.MkdirAll(bad, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	provider, _, err := resolveSandboxProvider(context.Background(), cfg, logger, &fakeProber{})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if _, err := provider.List(context.Background()); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if !strings.Contains(buf.String(), "skipping unreadable podman sandbox state") {
+		t.Fatalf("provider log output did not reach the resolver's logger; buffer = %q", buf.String())
+	}
+}
+
+// Cube seam: every log-emitting cube path needs a live Cube API, so
+// the wiring is pinned by identity — the constructed provider's
+// unexported log field must be exactly the logger handed to the
+// resolver (pre-fix it is cube's discard-handler default).
+func TestResolveSandboxProviderPropagatesLoggerToCube(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))
+	provider, _, err := resolveSandboxProvider(context.Background(), resolverConfig(""), logger, &fakeProber{})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	field := reflect.ValueOf(provider).Elem().FieldByName("log")
+	if !field.IsValid() {
+		t.Fatal("cube provider has no log field to inspect")
+	}
+	got := reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Interface().(*slog.Logger)
+	if got != logger {
+		t.Fatalf("cube provider logger = %p, want the resolver's logger %p", got, logger)
+	}
+}
+
+// The auto-mode prober carries the logger the same way; a nil logger
+// must fall back to slog.Default() rather than reach the providers
+// (their WithLogger options nil-guard, but the prober never relies on
+// that).
+func TestRealProberLoggerFallback(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))
+	if got := (realProber{log: logger}).logger(); got != logger {
+		t.Fatalf("realProber.logger() = %p, want the configured logger %p", got, logger)
+	}
+	if got := (realProber{}).logger(); got == nil || got != slog.Default() {
+		t.Fatalf("realProber{}.logger() = %p, want slog.Default() %p", got, slog.Default())
 	}
 }
 

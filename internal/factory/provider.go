@@ -48,11 +48,23 @@ type sandboxProber interface {
 	Podman(ctx context.Context, cfg Config) (sandbox.Provider, ProviderProbe)
 }
 
-type realProber struct{}
+type realProber struct {
+	log *slog.Logger
+}
 
-func (realProber) Cube(ctx context.Context, cfg Config) (sandbox.Provider, ProviderProbe) {
+// logger returns the prober's logger, falling back to slog.Default()
+// when none was supplied — the same normalization resolveSandboxProvider
+// applies — so the providers never receive a nil logger option.
+func (p realProber) logger() *slog.Logger {
+	if p.log != nil {
+		return p.log
+	}
+	return slog.Default()
+}
+
+func (p realProber) Cube(ctx context.Context, cfg Config) (sandbox.Provider, ProviderProbe) {
 	probe := ProviderProbe{Provider: ProviderModeCube, Configured: cfg.cubeConfigured()}
-	provider, err := cube.New(cfg.Cube)
+	provider, err := cube.New(cfg.Cube, cube.WithLogger(p.logger()))
 	if err != nil {
 		probe.Detail = err.Error()
 		return nil, probe
@@ -65,9 +77,9 @@ func (realProber) Cube(ctx context.Context, cfg Config) (sandbox.Provider, Provi
 	return provider, probe
 }
 
-func (realProber) Podman(ctx context.Context, cfg Config) (sandbox.Provider, ProviderProbe) {
+func (p realProber) Podman(ctx context.Context, cfg Config) (sandbox.Provider, ProviderProbe) {
 	probe := ProviderProbe{Provider: ProviderModePodman, Configured: cfg.podmanConfigured()}
-	provider, err := podman.New(cfg.Podman)
+	provider, err := podman.New(cfg.Podman, podman.WithLogger(p.logger()))
 	if err != nil {
 		probe.Detail = err.Error()
 		return nil, probe
@@ -91,7 +103,7 @@ func (realProber) Podman(ctx context.Context, cfg Config) (sandbox.Provider, Pro
 //
 // It never falls back to a fake provider.
 func ResolveSandboxProvider(ctx context.Context, cfg Config, log *slog.Logger) (sandbox.Provider, ProviderRecon, error) {
-	return resolveSandboxProvider(ctx, cfg, log, realProber{})
+	return resolveSandboxProvider(ctx, cfg, log, realProber{log: log})
 }
 
 func resolveSandboxProvider(ctx context.Context, cfg Config, log *slog.Logger, prober sandboxProber) (sandbox.Provider, ProviderRecon, error) {
@@ -103,7 +115,7 @@ func resolveSandboxProvider(ctx context.Context, cfg Config, log *slog.Logger, p
 	var selected sandbox.Provider
 	switch mode {
 	case ProviderModePodman:
-		provider, err := podman.New(cfg.Podman)
+		provider, err := podman.New(cfg.Podman, podman.WithLogger(log))
 		if err != nil {
 			return nil, recon, fmt.Errorf("build podman sandbox provider: %w", err)
 		}
@@ -135,7 +147,7 @@ func resolveSandboxProvider(ctx context.Context, cfg Config, log *slog.Logger, p
 			return nil, recon, fmt.Errorf("sandbox provider auto: no usable backend (%s)", strings.Join(parts, "; "))
 		}
 	default: // ProviderModeCube — pre-feature construction, unchanged.
-		provider, err := cube.New(cfg.Cube)
+		provider, err := cube.New(cfg.Cube, cube.WithLogger(log))
 		if err != nil {
 			return nil, recon, fmt.Errorf("build cubesandbox provider: %w", err)
 		}
