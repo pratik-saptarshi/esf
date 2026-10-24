@@ -22,6 +22,9 @@ request_timeout = "60s"
 # Used when [sandbox] provider is "podman" or "auto". Build the
 # template image from templates/podman/ in the ESF repository; see
 # templates/podman/README.md for the full operator guide.
+# NOTE: runs on this provider also need --sandbox-template <image>:
+# a run's sandbox template defaults to [cube] template_id, and the
+# image key below applies only when the run's template is empty.
 [podman]
 # image = "localhost/esf-template:debian13-node24"
 # network = "host"

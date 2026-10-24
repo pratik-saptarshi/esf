@@ -96,6 +96,24 @@ configured with `credential_mode = "cube_egress"` are rejected at startup on
 the podman provider, by name — they would otherwise fail halfway through a
 run at the runtime-network lockdown.
 
+**Runs also need `--sandbox-template`.** Selecting the provider and setting
+`[podman] image` is not sufficient on its own: a run's sandbox template
+still defaults to `[cube] template_id` — in the `factory run` CLI and again
+at sandbox creation — regardless of the selected provider. The podman
+provider treats a non-empty run template as the image reference and uses
+`[podman] image` only when the run's template is empty, which a defaulted
+run never is. Pass the template image on every run, as
+`scripts/podman-e2e.sh` does:
+
+```bash
+factory run --sandbox-template localhost/esf-template:debian13-node24 ...
+```
+
+Without the flag, podman tries to pull the cube `template_id` as an image
+and the run fails late, at sandbox creation, with a misleading pull error.
+If a cube template ID happened to resolve as an image reference, that image
+would be used instead of `[podman] image` — silently the wrong image.
+
 ## Execution model, in brief
 
 The provider never uses `podman exec` and never keeps a long-lived container.
