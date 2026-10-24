@@ -31,9 +31,10 @@ implement them:
    failure this gate exists to catch.
 3. **The egress-proxy CA is baked into the trust store.** On hosts behind a
    TLS-intercepting egress proxy, in-container HTTPS fails with
-   `SELF_SIGNED_CERT_IN_CHAIN` unless the proxy's CA is trusted. `build.sh`
-   stages the operator's **full** CA bundle (a bare root CA is not sufficient)
-   into the build, and the Containerfile installs it via
+   `SELF_SIGNED_CERT_IN_CHAIN` unless the proxy's CA is trusted. When the
+   operator sets `ESF_PROXY_CA_FILE`, `build.sh` stages their **full** CA
+   bundle (a bare root CA is not sufficient) into the build, and the
+   Containerfile installs it via
    `update-ca-certificates`. Node is pointed at the system store through
    `NODE_EXTRA_CA_CERTS` in `/etc/profile.d/esf.sh`.
 
@@ -52,7 +53,7 @@ explicit podman flags, then runs the smoke gate. Knobs (all optional):
 | `ESF_TEMPLATE_IMAGE` | `localhost/esf-template:debian13-node24` | Tag for the built image |
 | `ESF_NODE_VERSION` | `24.22.1` | Pinned Node version |
 | `ESF_CLAUDE_CODE_VERSION` | `2.1.310` | Claude Code version probed by the gate |
-| `ESF_PROXY_CA_FILE` | `/run/hatch/egress-tls/ca-bundle.pem` | Full egress CA bundle to bake in; missing file = no CA step |
+| `ESF_PROXY_CA_FILE` | unset | Full egress CA bundle to bake in (must be the complete bundle, not a bare root CA); unset or missing file = no CA baked in |
 | `ESF_CODEX_BIN` / `ESF_OPENCODE_BIN` | unset | Host paths to codex/opencode binaries for the gate to probe in-image |
 | `ESF_PODMAN_STORAGE_ROOT` | `~/.local/share/containers/storage` | Podman `--root` |
 | `ESF_PODMAN_RUN_ROOT` | `~/.local/share/containers/runroot` | Podman `--runroot` |
@@ -166,5 +167,6 @@ through the existing paths. Because rootfs execution does not apply image
   run, but cgroup resource limits may not enforce. It is not a failure and
   the provider does not treat it as one.
 - **Smoke gate fails at the npm registry fetch** with
-  `SELF_SIGNED_CERT_IN_CHAIN` — the staged CA file was a bare root CA instead
-  of the full bundle. Fix `ESF_PROXY_CA_FILE`, not the gate.
+  `SELF_SIGNED_CERT_IN_CHAIN` — the staged CA was missing (`ESF_PROXY_CA_FILE`
+  unset) or a bare root CA instead of the full bundle. Fix
+  `ESF_PROXY_CA_FILE`, not the gate.

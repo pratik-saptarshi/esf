@@ -25,8 +25,10 @@ SHASUMS="$(curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt")
 NODE_SHA256="$(printf '%s\n' "$SHASUMS" | awk -v f="node-v${NODE_VERSION}-${NODE_ARCH}.tar.xz" '$2 == f {print $1}')"
 [ -n "$NODE_SHA256" ] || { echo "could not resolve sha256 for Node v${NODE_VERSION} ${NODE_ARCH}" >&2; exit 1; }
 
-# Stage the egress CA bundle into the build context (empty = skip).
-CA_FILE="${ESF_PROXY_CA_FILE:-/run/hatch/egress-tls/ca-bundle.pem}"
+# Stage the egress CA bundle into the build context. Opt-in operator
+# input: set ESF_PROXY_CA_FILE when building behind a TLS-intercepting
+# egress proxy; unset = an empty bundle is staged and no CA is baked in.
+CA_FILE="${ESF_PROXY_CA_FILE:-}"
 if [ -f "$CA_FILE" ]; then cp "$CA_FILE" egress-ca.crt; else : > egress-ca.crt; fi
 trap 'rm -f egress-ca.crt' EXIT
 
