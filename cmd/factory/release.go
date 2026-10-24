@@ -278,6 +278,66 @@ type doctorCheck struct {
 	Detail string `json:"detail,omitempty"`
 }
 
+// sandboxProviderCheck builds the sandbox_provider doctor check from
+// the configured mode and, when a runtime was built, the provider the
+// recon resolver selected. It is emitted in every mode (including
+// --offline) so doctor consumers always see the recon summary.
+func sandboxProviderCheck(cfg factory.Config, recon *factory.ProviderRecon) doctorCheck {
+	mode := cfg.SandboxProviderMode()
+	configured := []string{}
+	if strings.TrimSpace(cfg.Cube.APIURL) != "" && strings.TrimSpace(cfg.Cube.TemplateID) != "" {
+		configured = append(configured, "cubesandbox")
+	}
+	if strings.TrimSpace(cfg.Podman.Image) != "" {
+		configured = append(configured, "podman")
+	}
+	detail := "mode=" + mode
+	if len(configured) > 0 {
+		detail += " configured=" + strings.Join(configured, ",")
+	}
+	status := "ok"
+	switch mode {
+	case "podman":
+		if !containsString(configured, "podman") {
+			status = "fail"
+			detail += " (provider is podman but [podman] image is not set)"
+		}
+	case "auto":
+		if len(configured) == 0 {
+			status = "fail"
+			detail += " (auto requires at least one configured backend)"
+		}
+	default: // cubesandbox
+		if !containsString(configured, "cubesandbox") {
+			status = "fail"
+			detail += " (cubesandbox is selected but [cube] api_url/template_id are not set)"
+		}
+	}
+	if recon != nil && recon.Selected != "" {
+		detail += " selected=" + recon.Selected
+	}
+	return doctorCheck{Name: "sandbox_provider", Status: status, Detail: detail}
+}
+
+func containsString(values []string, want string) bool {
+	for _, v := range values {
+		if v == want {
+			return true
+		}
+	}
+	return false
+}
+
+// reachabilityCheckName names the provider reachability check after
+// the selected backend. Cube hosts keep the legacy cube_reachable name;
+// sandbox_provider is the stable cross-backend check.
+func reachabilityCheckName(selected string) string {
+	if selected == "podman" {
+		return "podman_reachable"
+	}
+	return "cube_reachable"
+}
+
 func runStructuredDoctor(ctx context.Context, configPath, profile, output string, offline bool) error {
 	if profile != "" && profile != "production" {
 		return fmt.Errorf("unsupported doctor profile %q", profile)
@@ -339,6 +399,7 @@ func runStructuredDoctor(ctx context.Context, configPath, profile, output string
 		}
 	}
 	if offline {
+		checks = append(checks, sandboxProviderCheck(cfg, nil))
 		checks = append(checks, doctorCheck{Name: "connectivity", Status: "skipped", Detail: "--offline"})
 	} else if cfg.Validate() == nil {
 		probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -346,9 +407,11 @@ func runStructuredDoctor(ctx context.Context, configPath, profile, output string
 		runtime, err := factory.NewRuntime(probeCtx, factory.RuntimeOptions{Config: cfg})
 		if err != nil {
 			add("runtime", err)
+			checks = append(checks, sandboxProviderCheck(cfg, nil))
 		} else {
 			defer runtime.Close(probeCtx)
-			add("cube_reachable", runtime.Provider.Ping(probeCtx))
+			checks = append(checks, sandboxProviderCheck(cfg, &runtime.Recon))
+			add(reachabilityCheckName(runtime.Recon.Selected), runtime.Provider.Ping(probeCtx))
 			client, err := runtime.TemporalClient()
 			if err != nil {
 				add("temporal_reachable", err)
