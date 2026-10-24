@@ -18,6 +18,21 @@ proxy_scheme    = "https"
 idle_timeout    = "60m"
 request_timeout = "60s"
 
+# ── Podman container sandbox ─────────────────────────────────────────
+# Used when [sandbox] provider is "podman" or "auto". Build the
+# template image from templates/podman/ in the ESF repository; see
+# templates/podman/README.md for the full operator guide.
+[podman]
+# image = "localhost/esf-template:debian13-node24"
+# network = "host"
+# cgroup_manager = "cgroupfs"
+# storage_root = ""
+# run_root = ""
+# binary = "podman"
+# state_dir = "" (defaults to <storage.data_dir>/podman-sandboxes)
+# command_output_bytes = 4194304
+# request_timeout = "60s"
+
 [temporal]
 host_port  = "temporal.example.org:7233"
 tls        = true
@@ -36,6 +51,13 @@ task_queue = "factory"
 data_dir = "/var/lib/esf/factory"
 
 [sandbox]
+# Sandbox provider selection: "cubesandbox" (the default — KVM via
+# CubeSandbox), "podman" (containers), or "auto". With provider = "auto"
+# the worker probes the environment at startup: cubesandbox when it is
+# configured and reachable, otherwise podman, and fails closed when
+# neither backend is usable. Hosts without KVM (no /dev/kvm) should set
+# provider = "auto" or "podman".
+# provider = "cubesandbox"
 # Use a versioned Cube template with pinned Git, CA certificates, sha256sum,
 # head, mkfifo, and the configured agent binaries. Empty avoids network package
 # installation for every run. A development template may opt in to packages.
