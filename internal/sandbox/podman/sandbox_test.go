@@ -170,13 +170,11 @@ func TestResolveInRootfsRejectsEscape(t *testing.T) {
 		t.Fatalf("usrmerge resolve = %q, %v", got, err)
 	}
 	// Relative symlink escaping the rootfs: rejected.
-	// Adapted from the brief verbatim: the brief created this link with
-	// the absolute outside path, but Task 2's hardened resolveInRootfs
+	// The link target here is relative on purpose: resolveInRootfs
 	// (pinned by state_test.go's usrmerge/absolute tests) reinterprets
 	// absolute targets as rootfs-relative — containment, not escape.
-	// A relative target is the actual escape vector, per this case's
-	// own comment, so the link is created with the relative path to
-	// the outside directory instead.
+	// A relative target is the actual escape vector, so the link is
+	// created with the relative path to the outside directory.
 	outside := t.TempDir()
 	relEscape, err := filepath.Rel(rootfs, outside)
 	if err != nil {

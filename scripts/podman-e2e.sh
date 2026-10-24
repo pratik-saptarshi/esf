@@ -6,7 +6,7 @@
 # completes the credential-free conformance task on the podman
 # provider (patch + run.json SUCCEEDED/SUCCESS); no sandboxes leak;
 # doctor reports the recon. Does NOT prove model-backed agent runs —
-# those remain credential-gated (see the plan, Task 8).
+# those remain credential-gated.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

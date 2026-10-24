@@ -174,7 +174,7 @@ func TestResolveSandboxProviderRejectsCubeEgressOnPodman(t *testing.T) {
 	}
 }
 
-// Regression (Task 5 fix round 1): the resolver must propagate the
+// Regression: the resolver must propagate the
 // runtime logger into constructed providers — the pre-resolver worker
 // built cube with cube.WithLogger(log). Without propagation cube falls
 // back to a discard logger (every provider log line silently lost) and

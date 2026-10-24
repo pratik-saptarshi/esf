@@ -30,7 +30,7 @@ type ProviderProbe struct {
 
 // ProviderRecon records how the sandbox provider was chosen: the mode,
 // the selected provider name, and every probe outcome. Doctor surfaces
-// it verbatim (Task 6).
+// it verbatim.
 type ProviderRecon struct {
 	Mode     string          `json:"mode"`
 	Selected string          `json:"selected"`

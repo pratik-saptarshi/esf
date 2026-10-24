@@ -330,8 +330,7 @@ func containsString(values []string, want string) bool {
 
 // reachabilityCheckName names the provider reachability check after
 // the selected backend. Cube hosts keep the legacy cube_reachable name;
-// sandbox_provider is the stable cross-backend check (see the plan's
-// provisional decision P3).
+// sandbox_provider is the stable cross-backend check.
 func reachabilityCheckName(selected string) string {
 	if selected == "podman" {
 		return "podman_reachable"
