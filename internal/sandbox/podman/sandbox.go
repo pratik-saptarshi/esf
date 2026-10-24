@@ -63,7 +63,7 @@ func (s *podmanSandbox) Execute(ctx context.Context, cmd sandbox.Command) (sandb
 	for _, kv := range mergedEnv(s.env, cmd.Env) {
 		args = append(args, "-e", kv)
 	}
-	args = append(args, "--rootfs", s.rootfs, "/bin/bash", "-lc", exitFileScript(line))
+	args = append(args, "--rootfs", s.rootfs, "/bin/bash", "-lc", boundedCommandScript(line, p.cfg.effectiveOutputBytes()))
 
 	runCtx := ctx
 	cancel := func() {}
@@ -77,8 +77,9 @@ func (s *podmanSandbox) Execute(ctx context.Context, cmd sandbox.Command) (sandb
 		stdin = bytes.NewReader(cmd.Stdin)
 	}
 	started := time.Now()
-	var outBuf, errBuf bytes.Buffer
-	code, runErr := p.run.Run(runCtx, stdin, &outBuf, &errBuf, args...)
+	outBuf := &cappedBuffer{limit: p.cfg.effectiveOutputBytes() + 4096}
+	errBuf := &cappedBuffer{limit: p.cfg.effectiveOutputBytes() + 4096}
+	code, runErr := p.run.Run(runCtx, stdin, outBuf, errBuf, args...)
 	finished := time.Now()
 	exec := sandbox.Execution{
 		StartedAt: started, CompletedAt: finished, Duration: finished.Sub(started),
@@ -102,7 +103,7 @@ func (s *podmanSandbox) Execute(ctx context.Context, cmd sandbox.Command) (sandb
 	if runErr != nil {
 		return exec, classify(runErr, errBuf.String())
 	}
-	_ = code // podman's status is deliberately not the command's; see exitFileScript.
+	_ = code // podman's status is deliberately not the command's; see boundedCommandScript.
 	data, err := os.ReadFile(exitHostPath)
 	if err != nil {
 		return exec, fmt.Errorf("%w: sandbox %s command did not record an exit code (podman exited %d): %s",
@@ -120,16 +121,6 @@ func (p *Provider) killRunContainer(name string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_, _ = p.invoke(ctx, "kill", name)
-}
-
-// exitFileScript wraps a rendered command line so the command's exit
-// code is written to exitFilePath before the shell exits with it.
-func exitFileScript(line string) string {
-	return "mkdir -p /run\n" +
-		line + "\n" +
-		"esf_exit=$?\n" +
-		"printf '%s' \"$esf_exit\" > " + exitFilePath + "\n" +
-		"exit \"$esf_exit\"\n"
 }
 
 // mergedEnv renders spec env overridden by command env as sorted K=V
@@ -281,3 +272,5 @@ func slashJoin(rest string) string {
 func isUnder(root, path string) bool {
 	return path == root || strings.HasPrefix(path, root+string(os.PathSeparator))
 }
+
+var _ sandbox.Sandbox = (*podmanSandbox)(nil)
