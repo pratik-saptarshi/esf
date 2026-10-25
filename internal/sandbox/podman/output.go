@@ -7,30 +7,38 @@ import (
 
 // boundedCommandScript wraps a rendered command line so each output
 // stream is capped at limit bytes inside the sandbox before anything
-// reaches the host, mirroring the cube wrapper's contract
-// (internal/sandbox/cube/output.go): an overflowing stream is truncated
-// to the limit, ESF_OUTPUT_LIMIT_EXCEEDED is appended to stderr, and
-// the recorded exit code becomes 122. The final exit code is written to
-// exitFilePath (decision D5).
+// reaches the host, mirroring the cube wrapper's mechanism and
+// contract (internal/sandbox/cube/output.go): the command writes to
+// FIFOs drained by readers that keep at most limit+1 bytes per stream,
+// so stored output is bounded WHILE the command runs — an overflowing
+// producer loses its reader and is stopped by the closed pipe instead
+// of filling the rootfs until it exits. The extra byte distinguishes
+// an exact-limit result from overflow. An overflowing stream is
+// truncated to the limit, ESF_OUTPUT_LIMIT_EXCEEDED is appended to
+// stderr, and the recorded exit code becomes 122. The final exit code
+// is written to exitFilePath (decision D5).
 func boundedCommandScript(line string, limit int64) string {
 	return fmt.Sprintf(`mkdir -p /run
-esf_out_file=$(mktemp /tmp/esf-out.XXXXXX)
-esf_err_file=$(mktemp /tmp/esf-err.XXXXXX)
-( %s ) >"$esf_out_file" 2>"$esf_err_file"
+esf_output_dir=$(mktemp -d) || exit 125
+trap 'rm -rf "$esf_output_dir"' EXIT
+mkfifo "$esf_output_dir/out.pipe" "$esf_output_dir/err.pipe" || exit 125
+head -c %d <"$esf_output_dir/out.pipe" >"$esf_output_dir/out" &
+esf_out_pid=$!
+head -c %d <"$esf_output_dir/err.pipe" >"$esf_output_dir/err" &
+esf_err_pid=$!
+( %s ) >"$esf_output_dir/out.pipe" 2>"$esf_output_dir/err.pipe"
 esf_exit=$?
-esf_over=0
-if [ "$(wc -c <"$esf_out_file")" -gt %d ]; then esf_over=1; fi
-if [ "$(wc -c <"$esf_err_file")" -gt %d ]; then esf_over=1; fi
-head -c %d "$esf_out_file"
-head -c %d "$esf_err_file" >&2
-if [ "$esf_over" = "1" ]; then
+wait "$esf_out_pid" || true
+wait "$esf_err_pid" || true
+head -c %d "$esf_output_dir/out"
+head -c %d "$esf_output_dir/err" >&2
+if [ "$(wc -c <"$esf_output_dir/out")" -gt %d ] || [ "$(wc -c <"$esf_output_dir/err")" -gt %d ]; then
   printf '\nESF_OUTPUT_LIMIT_EXCEEDED: output exceeded the %d byte per-stream limit\n' >&2
   esf_exit=122
 fi
 printf '%%s' "$esf_exit" > /run/esf-exit
-rm -f "$esf_out_file" "$esf_err_file"
 exit "$esf_exit"
-`, line, limit, limit, limit, limit, limit)
+`, limit+1, limit+1, line, limit, limit, limit, limit, limit)
 }
 
 // cappedBuffer is an io.Writer retaining at most limit bytes. Defense in

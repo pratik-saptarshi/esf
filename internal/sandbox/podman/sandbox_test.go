@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -219,6 +220,153 @@ func TestExecuteBoundedScriptContract(t *testing.T) {
 			t.Fatalf("boundedCommandScript missing %q:\n%s", want, script)
 		}
 	}
+}
+
+// runBoundedScript executes boundedCommandScript under the host bash
+// with TMPDIR pointed at a test-controlled directory and samples the
+// total regular-file bytes stored under it while the script runs. It
+// returns the script's exit code, its stdout and stderr, the peak
+// stored bytes observed mid-run, and the content of the exit-code file
+// the script wrote (host /run/esf-exit; "" with checkExit=false when
+// that file could not be staged/observed cleanly).
+func runBoundedScript(t *testing.T, line string, limit int64) (code int, stdout, stderr string, peak int64, exitFile string, checkExit bool) {
+	t.Helper()
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	// The script records its exit code at the in-sandbox path
+	// /run/esf-exit; on the host that is a real file. Stage it away so
+	// the post-run read observes this run only.
+	if err := os.Remove(exitFilePath); err == nil || os.IsNotExist(err) {
+		checkExit = true
+		defer func() { _ = os.Remove(exitFilePath) }()
+	}
+	tmp := t.TempDir()
+	// A wrapper generation that stages capture files at an absolute
+	// /tmp template ignores TMPDIR; account for /tmp/esf-* files that
+	// appear after the run starts (pre-existing ones are excluded).
+	preExisting := map[string]bool{}
+	if matches, _ := filepath.Glob("/tmp/esf-*"); true {
+		for _, m := range matches {
+			preExisting[m] = true
+		}
+	}
+	storedBytes := func() int64 {
+		var total int64
+		_ = filepath.Walk(tmp, func(_ string, info os.FileInfo, err error) error {
+			if err == nil && info.Mode().IsRegular() {
+				total += info.Size()
+			}
+			return nil
+		})
+		if matches, _ := filepath.Glob("/tmp/esf-*"); true {
+			for _, m := range matches {
+				if preExisting[m] {
+					continue
+				}
+				if info, err := os.Stat(m); err == nil && info.Mode().IsRegular() {
+					total += info.Size()
+				}
+			}
+		}
+		return total
+	}
+	cmd := exec.Command("bash", "-c", boundedCommandScript(line, limit))
+	cmd.Dir = tmp
+	cmd.Env = append(os.Environ(), "TMPDIR="+tmp)
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start wrapper: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	deadline := time.Now().Add(60 * time.Second)
+	for {
+		if total := storedBytes(); total > peak {
+			peak = total
+		}
+		select {
+		case <-done:
+			if checkExit {
+				if data, err := os.ReadFile(exitFilePath); err == nil {
+					exitFile = string(data)
+				} else {
+					checkExit = false
+				}
+			}
+			return cmd.ProcessState.ExitCode(), outBuf.String(), errBuf.String(), peak, exitFile, checkExit
+		case <-time.After(20 * time.Millisecond):
+		}
+		if time.Now().After(deadline) {
+			_ = cmd.Process.Kill()
+			t.Fatalf("wrapper script did not finish within 60s (possible FIFO deadlock)")
+		}
+	}
+}
+
+// TestBoundedScriptBoundsStorageWhileRunning is the regression test
+// for the post-hoc bounding defect: the capture mechanism must bound
+// stored bytes WHILE the command runs, not merely truncate the
+// response after it exits. The staged producer emits 1 MiB in total
+// (bursts separated by sleeps so mid-run storage can be sampled)
+// against a 2048-byte per-stream limit.
+func TestBoundedScriptBoundsStorageWhileRunning(t *testing.T) {
+	const limit = 2048
+	line := `head -c 8192 /dev/zero | tr '\0' 'a'; sleep 2; head -c 8192 /dev/zero | tr '\0' 'a'; sleep 2; head -c 1032192 /dev/zero | tr '\0' 'a'`
+	code, stdout, stderr, peak, exitFile, checkExit := runBoundedScript(t, line, limit)
+	// Two streams, each hard-capped by its reader at limit+1 stored
+	// bytes, plus small slack: the store can never approach the
+	// producer's 1 MiB, whatever the exit path.
+	const bound = 2*(limit+1) + 256
+	if peak > bound {
+		t.Fatalf("peak stored bytes during run = %d, want <= %d (limit %d per stream)", peak, bound, limit)
+	}
+	if code != 122 {
+		t.Fatalf("exit code = %d, want 122 on overflow", code)
+	}
+	if int64(len(stdout)) != limit {
+		t.Fatalf("stdout len = %d, want exactly the %d-byte limit", len(stdout), limit)
+	}
+	if !strings.Contains(stderr, "ESF_OUTPUT_LIMIT_EXCEEDED") {
+		t.Fatalf("stderr lacks overflow marker: %q", stderr)
+	}
+	if checkExit && exitFile != "122" {
+		t.Fatalf("exit file = %q, want \"122\"", exitFile)
+	}
+}
+
+// TestBoundedScriptBehaviorContract pins the wrapper's observable
+// contract through real execution: exact-limit output is not overflow,
+// one byte over is, and ordinary commands keep their exit code and
+// streams untouched.
+func TestBoundedScriptBehaviorContract(t *testing.T) {
+	const limit = 2048
+	t.Run("exact limit is not overflow", func(t *testing.T) {
+		code, stdout, stderr, _, exitFile, checkExit := runBoundedScript(t, `head -c 2048 /dev/zero | tr '\0' 'b'`, limit)
+		if code != 0 || int64(len(stdout)) != limit || strings.Contains(stderr, "ESF_OUTPUT_LIMIT_EXCEEDED") {
+			t.Fatalf("code=%d stdout=%d stderr=%q, want 0/%d/no marker", code, len(stdout), stderr, limit)
+		}
+		if checkExit && exitFile != "0" {
+			t.Fatalf("exit file = %q, want \"0\"", exitFile)
+		}
+	})
+	t.Run("one byte over is overflow", func(t *testing.T) {
+		code, stdout, stderr, _, _, _ := runBoundedScript(t, `head -c 2049 /dev/zero | tr '\0' 'b'`, limit)
+		if code != 122 || int64(len(stdout)) != limit || !strings.Contains(stderr, "ESF_OUTPUT_LIMIT_EXCEEDED") {
+			t.Fatalf("code=%d stdout=%d stderr=%q, want 122/%d/marker", code, len(stdout), stderr, limit)
+		}
+	})
+	t.Run("ordinary command keeps exit code and streams", func(t *testing.T) {
+		code, stdout, stderr, _, exitFile, checkExit := runBoundedScript(t, `printf 'hello'; printf 'oops' >&2; exit 7`, limit)
+		if code != 7 || stdout != "hello" || stderr != "oops" {
+			t.Fatalf("code=%d stdout=%q stderr=%q, want 7/hello/oops", code, stdout, stderr)
+		}
+		if checkExit && exitFile != "7" {
+			t.Fatalf("exit file = %q, want \"7\"", exitFile)
+		}
+	})
 }
 
 func TestResolveInRootfsRejectsEscape(t *testing.T) {
