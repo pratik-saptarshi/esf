@@ -1,0 +1,50 @@
+# ESF podman sandbox template — Debian 13 (trixie) slim.
+# Base-image decision + re-evaluation: see the evaluation record in the
+# project docs. The FROM digest is pinned (Step 2 of the task).
+FROM docker.io/library/debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad
+
+ARG NODE_VERSION=24.22.1
+ARG NODE_ARCH=linux-x64
+ARG NODE_SHA256=
+ARG HTTPS_PROXY=
+ARG HTTP_PROXY=
+
+# Harness + verification toolchain. Distro nodejs/npm are deliberately
+# NOT installed (mitigation 1): Debian's Node is too old for the current
+# agent CLIs, and a distro npm would shadow the pinned one.
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      bash ca-certificates coreutils curl git python3 xz-utils \
+ && rm -rf /var/lib/apt/lists/*
+
+# Egress-proxy CA (mitigation 3). build.sh stages the operator's CA
+# bundle (or an empty file) into the build context as egress-ca.crt.
+# This step runs BEFORE the Node download below: the download is an
+# HTTPS fetch through the same intercepting proxy, so the trust store
+# must already carry the CA or the fetch cannot verify the chain.
+COPY egress-ca.crt /tmp/egress-ca.crt
+RUN if [ -s /tmp/egress-ca.crt ]; then \
+      cp /tmp/egress-ca.crt /usr/local/share/ca-certificates/esf-egress-ca.crt; \
+      update-ca-certificates; \
+    fi; \
+    rm -f /tmp/egress-ca.crt
+
+# Pinned Node.js from the official tarball, checksum-verified during
+# the build (mitigation 1). build.sh resolves NODE_SHA256 from the
+# official SHASUMS256.txt for the pinned version.
+RUN set -eu; \
+    test -n "$NODE_SHA256"; \
+    curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-${NODE_ARCH}.tar.xz"; \
+    echo "${NODE_SHA256}  node-v${NODE_VERSION}-${NODE_ARCH}.tar.xz" | sha256sum -c -; \
+    tar -xJf "node-v${NODE_VERSION}-${NODE_ARCH}.tar.xz" -C /usr/local --strip-components=1; \
+    rm "node-v${NODE_VERSION}-${NODE_ARCH}.tar.xz"; \
+    node --version; npm --version
+
+# Runtime environment for rootfs execution (image ENV is not applied
+# by `podman run --rootfs`, and the provider uses login shells).
+RUN mkdir -p /workspace /run \
+ && printf '%s\n' \
+      'export PATH="/usr/local/bin:/usr/bin:/bin"' \
+      'export NODE_EXTRA_CA_CERTS="/etc/ssl/certs/ca-certificates.crt"' \
+      > /etc/profile.d/esf.sh \
+ && useradd --create-home --uid 1000 esf

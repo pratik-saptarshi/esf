@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -18,7 +19,7 @@ import (
 	"github.com/mitkox/esf/internal/factoryartifacts"
 	"github.com/mitkox/esf/internal/repository"
 	"github.com/mitkox/esf/internal/sandbox"
-	"github.com/mitkox/esf/internal/sandbox/cube"
+	"github.com/mitkox/esf/internal/sandbox/podman"
 	"github.com/mitkox/esf/internal/verification"
 )
 
@@ -28,6 +29,7 @@ import (
 type Runtime struct {
 	Config    Config
 	Provider  sandbox.Provider
+	Recon     ProviderRecon
 	Repos     *repository.Provider
 	Harnesses *agentharness.Registry
 	Profiles  verification.Profiles
@@ -68,16 +70,30 @@ func NewRuntime(ctx context.Context, opts RuntimeOptions) (*Runtime, error) {
 		return nil, fmt.Errorf("build harnesses: %w", err)
 	}
 
-	provider := opts.SandboxProvider
-	if provider == nil {
-		if cfg.Limits.CommandOutputBytes > 0 {
-			cfg.Cube.CommandOutputBytes = cfg.Limits.CommandOutputBytes
-		}
-		cubeProvider, err := cube.New(cfg.Cube, cube.WithLogger(log))
+	// Provider selection: an injected provider always wins (tests,
+	// embeddings); otherwise the recon resolver decides from config.
+	// Limit propagation and the podman state-dir default are applied to
+	// a copy so Runtime.Config keeps the operator's values.
+	resolveCfg := cfg
+	if resolveCfg.Limits.CommandOutputBytes > 0 {
+		resolveCfg.Cube.CommandOutputBytes = resolveCfg.Limits.CommandOutputBytes
+		resolveCfg.Podman.CommandOutputBytes = resolveCfg.Limits.CommandOutputBytes
+	}
+	if strings.TrimSpace(resolveCfg.Podman.StateDir) == "" {
+		resolveCfg.Podman.StateDir = filepath.Join(resolveCfg.Storage.DataDir, "podman-sandboxes")
+	}
+	var provider sandbox.Provider
+	var recon ProviderRecon
+	if opts.SandboxProvider != nil {
+		provider = opts.SandboxProvider
+		recon = ProviderRecon{Mode: ProviderModeInjected, Selected: opts.SandboxProvider.Name()}
+	} else {
+		resolved, resolvedRecon, err := ResolveSandboxProvider(ctx, resolveCfg, log)
 		if err != nil {
-			return nil, fmt.Errorf("build cubesandbox provider: %w", err)
+			return nil, err
 		}
-		provider = cubeProvider
+		provider = resolved
+		recon = resolvedRecon
 	}
 
 	artifactLimit := cfg.Limits.ArtifactBytes
@@ -101,6 +117,7 @@ func NewRuntime(ctx context.Context, opts RuntimeOptions) (*Runtime, error) {
 	return &Runtime{
 		Config:    cfg,
 		Provider:  provider,
+		Recon:     recon,
 		Repos:     repository.New(cfg.Repositories.Allowed, repository.WithLogger(log)),
 		Harnesses: harnesses,
 		Profiles:  cfg.VerificationProfiles(),
@@ -248,12 +265,16 @@ func (r *Runtime) RunWorker(ctx context.Context) error {
 	if err := r.Provider.Ping(pingCtx); err != nil {
 		return fmt.Errorf("sandbox provider is not usable: %w", err)
 	}
+	template := r.Config.Cube.TemplateID
+	if r.Provider.Name() == podman.ProviderName {
+		template = r.Config.Podman.Image
+	}
 	r.Log.Info("factory worker starting",
 		slog.String("temporal.address", r.Config.Temporal.HostPort),
 		slog.String("temporal.namespace", r.Config.Temporal.Namespace),
 		slog.String("task_queue", r.Config.Temporal.TaskQueue),
 		slog.String("sandbox.provider", r.Provider.Name()),
-		slog.String("sandbox.template", r.Config.Cube.TemplateID),
+		slog.String("sandbox.template", template),
 		slog.Any("harnesses", r.Harnesses.Names()),
 		slog.String("artifacts", r.Artifacts.Root()),
 	)
