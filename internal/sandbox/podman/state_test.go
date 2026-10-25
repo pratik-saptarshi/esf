@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -224,6 +225,204 @@ func TestExtractRootfsUsrmergePreserved(t *testing.T) {
 		got, err := os.Readlink(filepath.Join(dest, link))
 		if err != nil || got != want {
 			t.Fatalf("symlink %s = %q, %v; want %q", link, got, err, want)
+		}
+	}
+}
+
+// --- extractRootfs: root directory permissions (finding N2) ---
+
+type tarEntryMode struct {
+	name     string
+	typeflag byte
+	mode     int64
+	linkname string
+	body     string
+}
+
+func buildTarModes(t *testing.T, entries []tarEntryMode) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	for _, e := range entries {
+		hdr := &tar.Header{Name: e.name, Mode: e.mode, Typeflag: e.typeflag, Linkname: e.linkname}
+		if e.typeflag == tar.TypeReg {
+			hdr.Size = int64(len(e.body))
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatal(err)
+		}
+		if e.typeflag == tar.TypeReg {
+			if _, err := tw.Write([]byte(e.body)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return &buf
+}
+
+func dirPerm(t *testing.T, path string) os.FileMode {
+	t.Helper()
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fi.Mode().Perm()
+}
+
+// preCreatedRootfs mimics Provider.Create: the rootfs directory is
+// pre-created at 0700 before extraction begins, inside a private tree.
+func preCreatedRootfs(t *testing.T) string {
+	t.Helper()
+	dest := filepath.Join(t.TempDir(), "rootfs")
+	if err := os.MkdirAll(dest, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got := dirPerm(t, dest); got != 0o700 {
+		t.Fatalf("precondition: dest mode = %o, want 0700", got)
+	}
+	return dest
+}
+
+// TestExtractRootfsRootEntryModeApplied: an image declaring its root
+// directory (any spelling) at 0755 must leave the extracted rootfs at
+// 0755, not at the 0700 Create pre-created it with — MkdirAll during
+// extraction cannot widen the existing directory. A rootfs stuck at
+// 0700 owned by the host user is untraversable by the container user
+// when [podman] user names a non-root user (finding N2).
+func TestExtractRootfsRootEntryModeApplied(t *testing.T) {
+	for _, name := range []string{".", "./", "/"} {
+		t.Run("root="+name, func(t *testing.T) {
+			dest := preCreatedRootfs(t)
+			tarBytes := buildTarModes(t, []tarEntryMode{
+				{name: name, typeflag: tar.TypeDir, mode: 0o755},
+				{name: "usr/bin/sh", typeflag: tar.TypeReg, mode: 0o755, body: "#!/bin/sh\n"},
+			})
+			if err := extractRootfs(tarBytes, dest); err != nil {
+				t.Fatalf("extractRootfs: %v", err)
+			}
+			if got := dirPerm(t, dest); got != 0o755 {
+				t.Fatalf("rootfs mode = %o, want 0755 (image-declared root)", got)
+			}
+			data, err := os.ReadFile(filepath.Join(dest, "usr", "bin", "sh"))
+			if err != nil || string(data) != "#!/bin/sh\n" {
+				t.Fatalf("usr/bin/sh = %q, %v", data, err)
+			}
+		})
+	}
+}
+
+// TestExtractRootfsRootModeDefaults0755: real image exports carry no
+// root entry at all (verified against debian:trixie-slim); the rootfs
+// must still end up traversable at the conventional 0755.
+func TestExtractRootfsRootModeDefaults0755(t *testing.T) {
+	dest := preCreatedRootfs(t)
+	tarBytes := buildTarModes(t, []tarEntryMode{
+		{name: "usr/bin/sh", typeflag: tar.TypeReg, mode: 0o755, body: "#!/bin/sh\n"},
+	})
+	if err := extractRootfs(tarBytes, dest); err != nil {
+		t.Fatalf("extractRootfs: %v", err)
+	}
+	if got := dirPerm(t, dest); got != 0o755 {
+		t.Fatalf("rootfs mode = %o, want default 0755 (no root entry declared)", got)
+	}
+}
+
+// TestExtractRootfsRootModeHonored: the image's declared root mode
+// wins over the default — 0750 stays 0750.
+func TestExtractRootfsRootModeHonored(t *testing.T) {
+	dest := preCreatedRootfs(t)
+	tarBytes := buildTarModes(t, []tarEntryMode{
+		{name: ".", typeflag: tar.TypeDir, mode: 0o750},
+	})
+	if err := extractRootfs(tarBytes, dest); err != nil {
+		t.Fatalf("extractRootfs: %v", err)
+	}
+	if got := dirPerm(t, dest); got != 0o750 {
+		t.Fatalf("rootfs mode = %o, want 0750 (image-declared root)", got)
+	}
+}
+
+func assertRunDir1777(t *testing.T, dest string) {
+	t.Helper()
+	fi, err := os.Stat(filepath.Join(dest, "run"))
+	if err != nil {
+		t.Fatalf("stat rootfs /run: %v", err)
+	}
+	if !fi.IsDir() || fi.Mode().Perm() != 0o777 || fi.Mode()&os.ModeSticky == 0 {
+		t.Fatalf("/run mode = %v, want drwxrwxrwt (1777)", fi.Mode())
+	}
+}
+
+// TestExtractRootfsRunDirWritableByRunUser: /run is the provider's own
+// scratch — the output wrapper writes /run/esf-exit there (decision
+// D5) — so it must be writable by the executing user, which need not
+// be root when [podman] user is set. Stock images ship /run root-owned
+// 0755 (or omit it, and the wrapper's mkdir -p /run then needs a
+// writable /). Extraction leaves /run at 1777, mirroring /tmp.
+func TestExtractRootfsRunDirWritableByRunUser(t *testing.T) {
+	t.Run("declared 0755", func(t *testing.T) {
+		dest := preCreatedRootfs(t)
+		tarBytes := buildTarModes(t, []tarEntryMode{
+			{name: "run", typeflag: tar.TypeDir, mode: 0o755},
+		})
+		if err := extractRootfs(tarBytes, dest); err != nil {
+			t.Fatalf("extractRootfs: %v", err)
+		}
+		assertRunDir1777(t, dest)
+	})
+	t.Run("absent", func(t *testing.T) {
+		dest := preCreatedRootfs(t)
+		tarBytes := buildTarModes(t, []tarEntryMode{
+			{name: "usr/bin/sh", typeflag: tar.TypeReg, mode: 0o755, body: "#!/bin/sh\n"},
+		})
+		if err := extractRootfs(tarBytes, dest); err != nil {
+			t.Fatalf("extractRootfs: %v", err)
+		}
+		assertRunDir1777(t, dest)
+	})
+}
+
+// TestExtractRootfsDeclaredModesSurviveUmask pins the general form of
+// finding N2: the modes an image declares must be the modes on disk,
+// regardless of the extracting process's umask. MkdirAll/OpenFile only
+// ever AND their mode argument with ^umask, so under a restrictive
+// umask (this host runs 0007; the test forces 0077 to make the point
+// umask-independent) declared-0755 directories and executables used
+// to land at 0700 — traversable and executable by root alone, which
+// is why root-user runs never noticed and a [podman] user run could
+// not even exec /bin/bash. Extraction must chmod what it created to
+// the declared modes; parent directories a tar omits entries for get
+// the conventional 0755.
+func TestExtractRootfsDeclaredModesSurviveUmask(t *testing.T) {
+	old := syscall.Umask(0o077)
+	defer syscall.Umask(old)
+
+	dest := t.TempDir()
+	tarBytes := buildTarModes(t, []tarEntryMode{
+		{name: "usr", typeflag: tar.TypeDir, mode: 0o755},
+		{name: "usr/bin", typeflag: tar.TypeDir, mode: 0o755},
+		{name: "usr/bin/sh", typeflag: tar.TypeReg, mode: 0o755, body: "#!/bin/sh\n"},
+		{name: "etc/motd", typeflag: tar.TypeReg, mode: 0o644, body: "hello\n"},
+		{name: "deep/nested/f", typeflag: tar.TypeReg, mode: 0o600, body: "secret\n"},
+	})
+	if err := extractRootfs(tarBytes, dest); err != nil {
+		t.Fatalf("extractRootfs: %v", err)
+	}
+	for path, want := range map[string]os.FileMode{
+		"usr":           0o755,
+		"usr/bin":       0o755,
+		"usr/bin/sh":    0o755,
+		"etc":           0o755, // implicit parent: no tar entry
+		"etc/motd":      0o644,
+		"deep":          0o755, // implicit parent: no tar entry
+		"deep/nested":   0o755, // implicit parent: no tar entry
+		"deep/nested/f": 0o600,
+	} {
+		if got := dirPerm(t, filepath.Join(dest, path)); got != want {
+			t.Errorf("%s mode = %o, want %o (image-declared)", path, got, want)
 		}
 	}
 }

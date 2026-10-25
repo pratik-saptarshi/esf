@@ -93,24 +93,50 @@ func readState(dir string) (sandboxState, error) {
 // the planted host symlink. Link entries themselves are placed via
 // linkLocation, which resolves only the parent chain and appends the
 // final component verbatim, so the link is created, not followed.
+//
+// Once every entry is in place, finishRootfs applies the permissions
+// the entry loop cannot land: the declared modes themselves (creation
+// is umask-filtered), the root directory's own declared mode, and a
+// /run writable by the executing user.
 func extractRootfs(r io.Reader, dest string) error {
 	tr := tar.NewReader(r)
+	var rootMode os.FileMode
+	// declared records the image-declared mode of every directory and
+	// regular file placed, and targets every placed path (links
+	// included, for their parent chains). Creation modes alone cannot
+	// land them — MkdirAll/OpenFile AND with the process umask — so
+	// finishRootfs applies them by chmod once extraction completes.
+	declared := map[string]os.FileMode{}
+	var targets []string
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
-			return nil
+			return finishRootfs(dest, rootMode, declared, targets)
 		}
 		if err != nil {
 			return fmt.Errorf("read image export: %w", err)
 		}
 		switch hdr.Typeflag {
 		case tar.TypeDir:
+			if isRootEntryName(hdr.Name) {
+				// The image's declaration for the rootfs root
+				// itself. The MkdirAll below cannot apply it —
+				// dest already exists (Create pre-created it) and
+				// MkdirAll never changes an existing directory's
+				// mode — so capture it here; finishRootfs chmods
+				// dest once extraction completes.
+				rootMode = fsMode(hdr.Mode, 0o755)
+			}
 			target, err := resolveInRootfs(dest, rootfsPath(hdr.Name))
 			if err != nil {
 				return err
 			}
 			if err := os.MkdirAll(target, fsMode(hdr.Mode, 0o755)); err != nil {
 				return fmt.Errorf("create rootfs dir %s: %w", hdr.Name, err)
+			}
+			targets = append(targets, target)
+			if target != dest {
+				declared[target] = fsMode(hdr.Mode, 0o755)
 			}
 		case tar.TypeReg:
 			target, err := resolveInRootfs(dest, rootfsPath(hdr.Name))
@@ -131,6 +157,8 @@ func extractRootfs(r io.Reader, dest string) error {
 			if err := f.Close(); err != nil {
 				return err
 			}
+			targets = append(targets, target)
+			declared[target] = fsMode(hdr.Mode, 0o644)
 		case tar.TypeSymlink:
 			target, err := linkLocation(dest, hdr.Name)
 			if err != nil {
@@ -146,6 +174,7 @@ func extractRootfs(r io.Reader, dest string) error {
 			if err := os.Symlink(hdr.Linkname, target); err != nil {
 				return fmt.Errorf("create rootfs symlink %s: %w", hdr.Name, err)
 			}
+			targets = append(targets, target)
 		case tar.TypeLink:
 			src, err := resolveInRootfs(dest, rootfsPath(hdr.Linkname))
 			if err != nil {
@@ -162,12 +191,108 @@ func extractRootfs(r io.Reader, dest string) error {
 			if err := os.Link(src, target); err != nil {
 				return fmt.Errorf("create rootfs hardlink %s: %w", hdr.Name, err)
 			}
+			targets = append(targets, target)
 		default:
 			// Device nodes, fifos, etc. cannot be created unprivileged and
 			// are not needed by the template images; skip them.
 			continue
 		}
 	}
+}
+
+// isRootEntryName reports whether a tar entry name denotes the rootfs
+// root itself. Image exports spell it ".", "./", or "/" — and most
+// omit the entry entirely (verified against a debian:trixie-slim
+// export, whose first entries are top-level names like "bin").
+func isRootEntryName(name string) bool {
+	switch filepath.Clean(name) {
+	case ".", "/":
+		return true
+	}
+	return false
+}
+
+// runDirMode is /run's mode in an extracted rootfs: world-writable
+// with the sticky bit (1777 in chmod notation; os.ModeSticky, since
+// os.FileMode does not carry the bit in the octal position).
+const runDirMode = 0o777 | os.ModeSticky
+
+// finishRootfs applies the permissions the extraction loop cannot,
+// after every entry is in place:
+//
+//   - Every declared directory/file mode is chmod'ed to land exactly.
+//     Creation (MkdirAll/OpenFile) ANDs the requested mode with the
+//     process umask, so under a restrictive umask the image's modes
+//     silently degrade — on a umask-0007 host, declared-0755
+//     directories and executables land at 0750, traversable and
+//     executable by their owner (the container's root) alone. Root
+//     never notices; a non-root container user ([podman] user) cannot
+//     even exec /bin/bash. Parent directories a tar omits entries for
+//     (created implicitly on the way to a file) get 0755, the mode
+//     extraction attempted for them.
+//   - The rootfs root takes the image's declared root mode (rootMode,
+//     zero when the image declares none), defaulting to 0755. This is
+//     the same defect in concentrated form: Create pre-creates the
+//     directory at 0700 and MkdirAll never widens an existing
+//     directory. The enclosing sandbox state dir stays 0700 — it
+//     holds spec.json — but the rootfs is the container's /, and a
+//     0700 root owned by the host user is untraversable by a non-root
+//     container user.
+//   - /run is the provider's runtime scratch: the output wrapper
+//     writes /run/esf-exit there as the executing user (decision D5),
+//     which need not be root. Stock images ship it root-owned 0755, so
+//     extraction leaves it sticky world-writable (1777, the /tmp
+//     convention), creating it when the image omits it — the
+//     wrapper's own mkdir -p /run would otherwise need a writable /.
+//     A /run the image plants as a symlink or file is left untouched.
+func finishRootfs(dest string, rootMode os.FileMode, declared map[string]os.FileMode, targets []string) error {
+	modes := make(map[string]os.FileMode, len(declared))
+	for path, mode := range declared {
+		modes[path] = mode
+	}
+	// Implicit parents: directories extraction created on the way to
+	// an entry without a declared mode of their own.
+	for _, target := range targets {
+		for dir := filepath.Dir(target); dir != dest && strings.HasPrefix(dir, dest+string(os.PathSeparator)); dir = filepath.Dir(dir) {
+			if _, ok := modes[dir]; !ok {
+				modes[dir] = 0o755
+			}
+		}
+	}
+	for path, mode := range modes {
+		// Never chmod through a symlink: a later entry may have
+		// replaced the path with one, and following it could land
+		// the chmod outside the rootfs.
+		if fi, err := os.Lstat(path); err != nil || fi.Mode()&os.ModeSymlink != 0 {
+			continue
+		}
+		if err := os.Chmod(path, mode); err != nil {
+			return fmt.Errorf("set rootfs permissions on %s: %w", path, err)
+		}
+	}
+	if rootMode == 0 {
+		rootMode = 0o755
+	}
+	if err := os.Chmod(dest, rootMode); err != nil {
+		return fmt.Errorf("set rootfs root permissions: %w", err)
+	}
+	runDir := filepath.Join(dest, "run")
+	fi, err := os.Lstat(runDir)
+	switch {
+	case os.IsNotExist(err):
+		if err := os.MkdirAll(runDir, runDirMode); err != nil {
+			return fmt.Errorf("create rootfs /run: %w", err)
+		}
+	case err != nil:
+		return fmt.Errorf("stat rootfs /run: %w", err)
+	case !fi.IsDir():
+		// Planted by the image as a symlink or file: not ours to widen.
+		return nil
+	}
+	if err := os.Chmod(runDir, runDirMode); err != nil {
+		return fmt.Errorf("set rootfs /run permissions: %w", err)
+	}
+	return nil
 }
 
 // rootfsPath renders a tar entry name as the absolute in-rootfs path

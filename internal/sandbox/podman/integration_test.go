@@ -109,6 +109,46 @@ func TestPodmanLifecycleIntegration(t *testing.T) {
 	}
 }
 
+// TestPodmanNonRootUserIntegration is the integration regression for
+// finding N2: with the documented [podman] user option set to a
+// non-root uid, the container must be able to traverse the rootfs and
+// execute. Create pre-creates the rootfs at 0700 (and the state dir
+// holding spec.json must STAY 0700); extraction must leave the
+// rootfs itself at the image's root permissions (0755 for debian).
+// The output wrapper also writes /run/esf-exit as the executing user,
+// so /run must be user-writable in the extracted rootfs.
+func TestPodmanNonRootUserIntegration(t *testing.T) {
+	ctx := context.Background()
+	p := integrationProvider(t, func(c *Config) { c.User = "1000" })
+	sb, err := p.Create(ctx, sandbox.Spec{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	defer p.Destroy(ctx, sb.ID())
+
+	stateInfo, err := os.Stat(filepath.Join(p.cfg.StateDir, sb.ID()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := stateInfo.Mode().Perm(); got != 0o700 {
+		t.Fatalf("sandbox state dir mode = %o, want 0700 (holds spec.json)", got)
+	}
+	rootfsInfo, err := os.Stat(filepath.Join(p.cfg.StateDir, sb.ID(), "rootfs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := rootfsInfo.Mode().Perm(); got != 0o755 {
+		t.Fatalf("rootfs mode = %o, want 0755 (image root permissions)", got)
+	}
+	exec, err := sb.Execute(ctx, sandbox.Command{Script: "id -u && echo nonroot-ok"})
+	if err != nil || exec.ExitCode != 0 {
+		t.Fatalf("Execute as uid 1000: %+v, %v", exec, err)
+	}
+	if !strings.Contains(exec.Stdout, "1000") || !strings.Contains(exec.Stdout, "nonroot-ok") {
+		t.Fatalf("Execute as uid 1000 stdout = %q, want it to contain \"1000\" and \"nonroot-ok\"", exec.Stdout)
+	}
+}
+
 func TestPodmanOutputLimitIntegration(t *testing.T) {
 	ctx := context.Background()
 	p := integrationProvider(t, func(c *Config) { c.CommandOutputBytes = 4096 })
