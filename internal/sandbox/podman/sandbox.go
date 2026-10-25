@@ -104,7 +104,7 @@ func (s *podmanSandbox) Execute(ctx context.Context, cmd sandbox.Command) (sandb
 		return exec, classify(runErr, errBuf.String())
 	}
 	_ = code // podman's status is deliberately not the command's; see boundedCommandScript.
-	data, err := os.ReadFile(exitHostPath)
+	data, err := s.readExitFile()
 	if err != nil {
 		return exec, fmt.Errorf("%w: sandbox %s command did not record an exit code (podman exited %d): %s",
 			ErrUnavailable, s.id, code, tailText(errBuf.String()))
@@ -115,6 +115,45 @@ func (s *podmanSandbox) Execute(ctx context.Context, cmd sandbox.Command) (sandb
 	}
 	exec.ExitCode = n
 	return exec, nil
+}
+
+// maxExitFileBytes bounds the exit-code file read. A recorded exit code
+// is a short decimal integer; anything larger was not produced by the
+// wrapper and is rejected unread.
+const maxExitFileBytes = 32
+
+// readExitFile reads the wrapper's exit-code file through the validated
+// rootfs path — the same discipline as ReadFile. The file is written by
+// the sandboxed command, so it must not be trusted: resolving through
+// resolveInRootfs guarantees the bytes come from a plain file inside the
+// rootfs (a planted symlink can never steer the host-side read to a host
+// target), and the bounded, regular-file-only read guarantees host bytes
+// can never flow into the caller's error messages.
+func (s *podmanSandbox) readExitFile() ([]byte, error) {
+	target, err := resolveInRootfs(s.rootfs, exitFilePath)
+	if err != nil {
+		return nil, err
+	}
+	fi, err := os.Lstat(target)
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, errors.New("exit file is not a regular file")
+	}
+	f, err := os.Open(target)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, maxExitFileBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxExitFileBytes {
+		return nil, fmt.Errorf("exit file exceeds %d bytes", maxExitFileBytes)
+	}
+	return data, nil
 }
 
 func (p *Provider) killRunContainer(name string) {

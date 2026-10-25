@@ -129,6 +129,74 @@ func TestExecuteParsesExitFile(t *testing.T) {
 	}
 }
 
+// exitSymlinkFake emulates a sandboxed command that replaces the exit
+// file with a symlink pointing at a host file outside the rootfs
+// (Codex finding F1 on PR #4). The wrapper writes the exit code through
+// the link inside the sandbox; a host-side read that follows the link
+// reads the host file instead.
+type exitSymlinkFake struct {
+	hostFile string // absolute path of the host file to point the link at
+	relative bool   // make the link target relative (../.. escape) instead of absolute
+}
+
+func (f *exitSymlinkFake) Run(_ context.Context, _ io.Reader, _, _ io.Writer, args ...string) (int, error) {
+	rootfs := ""
+	for i, a := range args {
+		if a == "--rootfs" && i+1 < len(args) {
+			rootfs = args[i+1]
+		}
+	}
+	if rootfs == "" {
+		return 0, nil
+	}
+	target := f.hostFile
+	if f.relative {
+		rel, err := filepath.Rel(filepath.Join(rootfs, "run"), f.hostFile)
+		if err != nil {
+			return 0, err
+		}
+		target = rel
+	}
+	if err := os.MkdirAll(filepath.Join(rootfs, "run"), 0o755); err != nil {
+		return 0, err
+	}
+	link := filepath.Join(rootfs, "run", "esf-exit")
+	_ = os.Remove(link)
+	if err := os.Symlink(target, link); err != nil {
+		return 0, err
+	}
+	return 0, nil
+}
+
+func TestExecuteExitFileSymlinkDoesNotLeakHostFile(t *testing.T) {
+	const marker = "HOST-FILE-MARKER-9f27c1"
+	hostFile := filepath.Join(t.TempDir(), "host-secret")
+	if err := os.WriteFile(hostFile, []byte(marker+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name     string
+		relative bool
+	}{
+		{name: "absolute symlink", relative: false},
+		{name: "relative symlink escape", relative: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sb := testSandbox(t, &execFake{}, nil)
+			// testSandbox's seam is typed for *execFake; substitute the
+			// provider's runner with the symlink-planting fake.
+			sb.provider.run = &exitSymlinkFake{hostFile: hostFile, relative: tc.relative}
+			_, err := sb.Execute(context.Background(), sandbox.Command{Argv: []string{"true"}})
+			if err == nil {
+				t.Fatalf("Execute succeeded with a symlinked exit file, want error")
+			}
+			if strings.Contains(err.Error(), marker) {
+				t.Fatalf("error leaked host file contents: %v", err)
+			}
+		})
+	}
+}
+
 func TestExecuteTimeoutKillsContainer(t *testing.T) {
 	fr := &execFake{blockRun: true}
 	sb := testSandbox(t, fr, nil)
