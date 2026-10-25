@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -434,5 +435,103 @@ func TestWriteReadFileRoundTrip(t *testing.T) {
 	}
 	if err := sb.WriteFile(ctx, "", data); !errors.Is(err, ErrInvalidSpec) {
 		t.Fatalf("WriteFile empty path: err = %v, want ErrInvalidSpec", err)
+	}
+}
+
+// TestResolveInRootfsDeepPlainPath is the regression test for the hop
+// budget counting every path component instead of only symlink
+// expansions: a path through more than 16 perfectly ordinary
+// directories — zero symlinks anywhere — must resolve.
+func TestResolveInRootfsDeepPlainPath(t *testing.T) {
+	rootfs := t.TempDir()
+	deep, path := rootfs, ""
+	for i := 1; i <= 18; i++ {
+		name := fmt.Sprintf("d%02d", i)
+		deep = filepath.Join(deep, name)
+		path += "/" + name
+	}
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(deep, "file.txt"), []byte("deep\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := resolveInRootfs(rootfs, path+"/file.txt")
+	if err != nil {
+		t.Fatalf("resolveInRootfs(19 plain components) = %v, want nil", err)
+	}
+	if want := filepath.Join(deep, "file.txt"); got != want {
+		t.Fatalf("resolveInRootfs(19 plain components) = %q, want %q", got, want)
+	}
+}
+
+// TestReadWriteFileDeepPath covers the same regression through the
+// Sandbox surface: WriteFile creates the deep tree, ReadFile must walk
+// every existing component without tripping the symlink budget.
+func TestReadWriteFileDeepPath(t *testing.T) {
+	ctx := context.Background()
+	sb := testSandbox(t, &execFake{}, nil)
+	path := ""
+	for i := 1; i <= 18; i++ {
+		path += fmt.Sprintf("/d%02d", i)
+	}
+	path += "/file.txt"
+	data := []byte("deep\n")
+	if err := sb.WriteFile(ctx, path, data); err != nil {
+		t.Fatalf("WriteFile deep path: %v", err)
+	}
+	back, err := sb.ReadFile(ctx, path)
+	if err != nil || !bytes.Equal(back, data) {
+		t.Fatalf("ReadFile deep path = %q, %v", back, err)
+	}
+}
+
+// TestResolveInRootfsSymlinkCycleRejected pins what the hop budget is
+// actually for: a symlink cycle (a -> b -> a) must still fail with the
+// too-many-hops error once the budget counts expansions only.
+func TestResolveInRootfsSymlinkCycleRejected(t *testing.T) {
+	rootfs := t.TempDir()
+	if err := os.Symlink("b", filepath.Join(rootfs, "a")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("a", filepath.Join(rootfs, "b")); err != nil {
+		t.Fatal(err)
+	}
+	_, err := resolveInRootfs(rootfs, "/a")
+	if !errors.Is(err, ErrInvalidSpec) {
+		t.Fatalf("symlink cycle: err = %v, want ErrInvalidSpec", err)
+	}
+	if !strings.Contains(err.Error(), "too many symlink hops") {
+		t.Fatalf("symlink cycle: err = %v, want too-many-hops message", err)
+	}
+}
+
+// TestResolveInRootfsLongSymlinkChainRejected pins the budget against
+// a finite but over-long chain: 20 symlinks (budget 16) ending at a
+// real directory must still fail with the too-many-hops error.
+func TestResolveInRootfsLongSymlinkChainRejected(t *testing.T) {
+	rootfs := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(rootfs, "real"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rootfs, "real", "f.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	const links = 20
+	for i := links - 1; i >= 0; i-- {
+		target := "real"
+		if i < links-1 {
+			target = fmt.Sprintf("l%02d", i+1)
+		}
+		if err := os.Symlink(target, filepath.Join(rootfs, fmt.Sprintf("l%02d", i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err := resolveInRootfs(rootfs, "/l00/f.txt")
+	if !errors.Is(err, ErrInvalidSpec) {
+		t.Fatalf("20-link chain: err = %v, want ErrInvalidSpec", err)
+	}
+	if !strings.Contains(err.Error(), "too many symlink hops") {
+		t.Fatalf("20-link chain: err = %v, want too-many-hops message", err)
 	}
 }

@@ -237,10 +237,11 @@ func resolveInRootfs(rootfs, path string) (string, error) {
 	}
 	current := rootfs
 	rest := strings.TrimPrefix(filepath.Clean(path), "/")
-	for hops := 0; rest != ""; hops++ {
-		if hops > 16 {
-			return "", fmt.Errorf("%w: sandbox path %q has too many symlink hops", ErrInvalidSpec, path)
-		}
+	// The hop budget stops symlink cycles and over-long chains; only
+	// symlink expansions count against it. Plain directory traversal is
+	// unbounded — a deep path with no symlinks must always resolve.
+	hops := 0
+	for rest != "" {
 		head, tail, _ := strings.Cut(rest, "/")
 		rest = tail
 		if head == ".." {
@@ -262,6 +263,10 @@ func resolveInRootfs(rootfs, path string) (string, error) {
 			return "", fmt.Errorf("stat sandbox path %q: %w", path, err)
 		}
 		if fi.Mode()&fs.ModeSymlink != 0 {
+			hops++
+			if hops > 16 {
+				return "", fmt.Errorf("%w: sandbox path %q has too many symlink hops", ErrInvalidSpec, path)
+			}
 			target, err := os.Readlink(next)
 			if err != nil {
 				return "", fmt.Errorf("read sandbox symlink %q: %w", path, err)
