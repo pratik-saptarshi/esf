@@ -99,7 +99,40 @@ func (p *Provider) ensureImage(ctx context.Context, image string) error {
 	return nil
 }
 
+// validateNetwork fails closed on any spec.Network element that
+// restricts egress. The provider runs every sandbox on the
+// deployment's static --network setting and has no mechanism to
+// enforce a per-run policy (no egress proxy, no firewall control), so
+// a restrictive policy must be refused rather than silently run wide
+// open. Cube maps these same fields into its sandbox options; podman
+// cannot. A zero Network (deployment default) and an explicitly open
+// policy are accepted: open egress is what the deployment network
+// already provides.
+func validateNetwork(n sandbox.Network) error {
+	var restrictive []string
+	if n.AllowInternet != nil && !*n.AllowInternet {
+		restrictive = append(restrictive, "allow_internet=false")
+	}
+	if len(n.AllowOut) > 0 {
+		restrictive = append(restrictive, "allow_out")
+	}
+	if len(n.DenyOut) > 0 {
+		restrictive = append(restrictive, "deny_out")
+	}
+	if len(n.Rules) > 0 {
+		restrictive = append(restrictive, "rules")
+	}
+	if len(restrictive) > 0 {
+		return fmt.Errorf("%w: podman cannot enforce network policy (%s); the deployment network setting governs egress",
+			ErrInvalidSpec, strings.Join(restrictive, ", "))
+	}
+	return nil
+}
+
 func (p *Provider) Create(ctx context.Context, spec sandbox.Spec) (sandbox.Sandbox, error) {
+	if err := validateNetwork(spec.Network); err != nil {
+		return nil, err
+	}
 	image := strings.TrimSpace(spec.Template)
 	if image == "" {
 		image = p.cfg.Image
