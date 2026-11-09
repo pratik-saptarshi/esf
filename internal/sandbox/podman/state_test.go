@@ -272,6 +272,52 @@ func dirPerm(t *testing.T, path string) os.FileMode {
 	return fi.Mode().Perm()
 }
 
+// TestExtractRootfsPreservesImageOwnership: entries declared with a
+// non-root UID/GID (the template's /home/esf at UID 1000) must keep
+// that ownership after extraction when the extractor is privileged,
+// so the configured container user can write its own home. Requires
+// root (chown is privileged); skipped otherwise.
+func TestExtractRootfsPreservesImageOwnership(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("ownership preservation requires root")
+	}
+	dest := preCreatedRootfs(t)
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	for _, hdr := range []*tar.Header{
+		{Name: "home/esf/", Mode: 0o755, Typeflag: tar.TypeDir, Uid: 1000, Gid: 1000},
+		{Name: "home/esf/.profile", Mode: 0o644, Typeflag: tar.TypeReg, Uid: 1000, Gid: 1000, Size: 4},
+	} {
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatal(err)
+		}
+		if hdr.Typeflag == tar.TypeReg {
+			if _, err := tw.Write([]byte("data")); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := extractRootfs(&buf, dest); err != nil {
+		t.Fatalf("extractRootfs: %v", err)
+	}
+	for _, path := range []string{"home/esf", "home/esf/.profile"} {
+		fi, err := os.Lstat(filepath.Join(dest, path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		st, ok := fi.Sys().(*syscall.Stat_t)
+		if !ok {
+			t.Fatalf("%s: Sys() is %T, want *syscall.Stat_t", path, fi.Sys())
+		}
+		if st.Uid != 1000 || st.Gid != 1000 {
+			t.Fatalf("%s: ownership = %d:%d, want 1000:1000", path, st.Uid, st.Gid)
+		}
+	}
+}
+
 // preCreatedRootfs mimics Provider.Create: the rootfs directory is
 // pre-created at 0700 before extraction begins, inside a private tree.
 func preCreatedRootfs(t *testing.T) string {

@@ -95,9 +95,10 @@ func readState(dir string) (sandboxState, error) {
 // final component verbatim, so the link is created, not followed.
 //
 // Once every entry is in place, finishRootfs applies the permissions
-// the entry loop cannot land: the declared modes themselves (creation
-// is umask-filtered), the root directory's own declared mode, and a
-// /run writable by the executing user.
+// and ownership the entry loop cannot land: the declared modes
+// themselves (creation is umask-filtered), the root directory's own
+// declared mode, the image-declared UID/GID, and a /run writable by
+// the executing user.
 func extractRootfs(r io.Reader, dest string) error {
 	tr := tar.NewReader(r)
 	var rootMode os.FileMode
@@ -107,11 +108,17 @@ func extractRootfs(r io.Reader, dest string) error {
 	// land them — MkdirAll/OpenFile AND with the process umask — so
 	// finishRootfs applies them by chmod once extraction completes.
 	declared := map[string]os.FileMode{}
+	// owners records the image-declared UID/GID of every placed
+	// directory and regular file. Without it, extraction leaves
+	// everything owned by the provider's host user: the template's
+	// /home/esf (UID 1000) becomes root-owned, so the configured
+	// non-root container user can exec but cannot write its own home.
+	owners := map[string]fileOwner{}
 	var targets []string
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
-			return finishRootfs(dest, rootMode, declared, targets)
+			return finishRootfs(dest, rootMode, declared, owners, targets)
 		}
 		if err != nil {
 			return fmt.Errorf("read image export: %w", err)
@@ -137,6 +144,7 @@ func extractRootfs(r io.Reader, dest string) error {
 			targets = append(targets, target)
 			if target != dest {
 				declared[target] = fsMode(hdr.Mode, 0o755)
+				owners[target] = fileOwner{uid: hdr.Uid, gid: hdr.Gid}
 			}
 		case tar.TypeReg:
 			target, err := resolveInRootfs(dest, rootfsPath(hdr.Name))
@@ -159,6 +167,7 @@ func extractRootfs(r io.Reader, dest string) error {
 			}
 			targets = append(targets, target)
 			declared[target] = fsMode(hdr.Mode, 0o644)
+			owners[target] = fileOwner{uid: hdr.Uid, gid: hdr.Gid}
 		case tar.TypeSymlink:
 			target, err := linkLocation(dest, hdr.Name)
 			if err != nil {
@@ -192,6 +201,14 @@ func extractRootfs(r io.Reader, dest string) error {
 				return fmt.Errorf("create rootfs hardlink %s: %w", hdr.Name, err)
 			}
 			targets = append(targets, target)
+			// A hardlink shares the source inode: it already carries
+			// the source's ownership, so record it explicitly to keep
+			// the owners map complete for finishRootfs.
+			if o, ok := owners[src]; ok {
+				owners[target] = o
+			} else {
+				owners[target] = fileOwner{uid: hdr.Uid, gid: hdr.Gid}
+			}
 		default:
 			// Device nodes, fifos, etc. cannot be created unprivileged and
 			// are not needed by the template images; skip them.
@@ -217,10 +234,19 @@ func isRootEntryName(name string) bool {
 // os.FileMode does not carry the bit in the octal position).
 const runDirMode = 0o777 | os.ModeSticky
 
-// finishRootfs applies the permissions the extraction loop cannot,
-// after every entry is in place:
+// fileOwner is the image-declared UID/GID of an extracted path.
+type fileOwner struct {
+	uid int
+	gid int
+}
+
+// finishRootfs applies the permissions and ownership the extraction
+// loop cannot, after every entry is in place:
 //
-//   - Every declared directory/file mode is chmod'ed to land exactly.
+//   - Every declared directory/file mode is chmod'ed to land exactly,
+//     and (when running as root) every declared UID/GID is chown'ed
+//     to land exactly, so user-owned paths like /home/esf stay owned
+//     by the image's user rather than the provider's host user.
 //     Creation (MkdirAll/OpenFile) ANDs the requested mode with the
 //     process umask, so under a restrictive umask the image's modes
 //     silently degrade — on a umask-0007 host, declared-0755
@@ -245,7 +271,7 @@ const runDirMode = 0o777 | os.ModeSticky
 //     convention), creating it when the image omits it — the
 //     wrapper's own mkdir -p /run would otherwise need a writable /.
 //     A /run the image plants as a symlink or file is left untouched.
-func finishRootfs(dest string, rootMode os.FileMode, declared map[string]os.FileMode, targets []string) error {
+func finishRootfs(dest string, rootMode os.FileMode, declared map[string]os.FileMode, owners map[string]fileOwner, targets []string) error {
 	modes := make(map[string]os.FileMode, len(declared))
 	for path, mode := range declared {
 		modes[path] = mode
@@ -259,15 +285,29 @@ func finishRootfs(dest string, rootMode os.FileMode, declared map[string]os.File
 			}
 		}
 	}
+	// Ownership preservation needs privilege: only a root extractor
+	// can chown to the image's UID/GID (the documented rootful
+	// deployment). An unprivileged extractor cannot, and user-namespace
+	// rootless deployments map container UIDs differently anyway, so
+	// ownership is applied only when running as root; otherwise the
+	// paths stay owned by the provider's user (previous behavior).
+	preserveOwnership := os.Geteuid() == 0
 	for path, mode := range modes {
-		// Never chmod through a symlink: a later entry may have
-		// replaced the path with one, and following it could land
-		// the chmod outside the rootfs.
+		// Never chmod/chown through a symlink: a later entry may
+		// have replaced the path with one, and following it could
+		// land the operation outside the rootfs.
 		if fi, err := os.Lstat(path); err != nil || fi.Mode()&os.ModeSymlink != 0 {
 			continue
 		}
 		if err := os.Chmod(path, mode); err != nil {
 			return fmt.Errorf("set rootfs permissions on %s: %w", path, err)
+		}
+		if preserveOwnership {
+			if o, ok := owners[path]; ok {
+				if err := os.Chown(path, o.uid, o.gid); err != nil {
+					return fmt.Errorf("set rootfs ownership on %s: %w", path, err)
+				}
+			}
 		}
 	}
 	if rootMode == 0 {
