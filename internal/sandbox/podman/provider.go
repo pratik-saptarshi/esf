@@ -17,6 +17,14 @@ import (
 // sandbox.Info.ProviderID.
 const ProviderName = "podman"
 
+// geteuid is the test seam for the Create gate's privilege check
+// (validateUser). It is package-level so tests can override it
+// hermetically (including on hosts where the suite runs as root);
+// production always uses os.Geteuid. Only the gate consults it:
+// extraction's own privilege check in finishRootfs stays on
+// os.Geteuid and is covered by its own root-gated tests.
+var geteuid = os.Geteuid
+
 // Provider implements sandbox.Provider on podman. Sandboxes are
 // directories: <StateDir>/<id>/spec.json + <StateDir>/<id>/rootfs.
 type Provider struct {
@@ -129,8 +137,32 @@ func validateNetwork(n sandbox.Network) error {
 	return nil
 }
 
+// validateUser fails closed when [podman] user is set but ESF does not
+// run as root. Image ownership (e.g. /home/esf, UID 1000) is preserved
+// at extraction by chown, which only a root extractor can do. An
+// unprivileged extractor would silently skip the chown and leave
+// user-owned paths owned by the provider's host user — the configured
+// non-root container user could exec but could not write its own home
+// — so the degraded filesystem must never be created silently. user=""
+// is the documented escape hatch: the sandbox runs with the provider's
+// host-user ownership (known-degraded for user-owned paths) and Create
+// proceeds.
+func validateUser(user string) error {
+	if strings.TrimSpace(user) == "" {
+		return nil
+	}
+	if geteuid() != 0 {
+		return fmt.Errorf("%w: podman cannot preserve image ownership unprivileged ([podman] user %q requires root to chown the extracted rootfs); set user=\"\" to run with known-degraded ownership, or run ESF as root",
+			ErrInvalidSpec, strings.TrimSpace(user))
+	}
+	return nil
+}
+
 func (p *Provider) Create(ctx context.Context, spec sandbox.Spec) (sandbox.Sandbox, error) {
 	if err := validateNetwork(spec.Network); err != nil {
+		return nil, err
+	}
+	if err := validateUser(p.cfg.User); err != nil {
 		return nil, err
 	}
 	image := strings.TrimSpace(spec.Template)

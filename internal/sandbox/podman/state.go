@@ -291,6 +291,9 @@ func finishRootfs(dest string, rootMode os.FileMode, declared map[string]os.File
 	// rootless deployments map container UIDs differently anyway, so
 	// ownership is applied only when running as root; otherwise the
 	// paths stay owned by the provider's user (previous behavior).
+	// Provider.Create refuses [podman] user unprivileged (validateUser)
+	// so that degraded state is never reached with a non-root container
+	// user expecting a writable home; user="" accepts it knowingly.
 	preserveOwnership := os.Geteuid() == 0
 	for path, mode := range modes {
 		// Never chmod/chown through a symlink: a later entry may

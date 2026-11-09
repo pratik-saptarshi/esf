@@ -4,10 +4,12 @@ package podman
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -146,6 +148,73 @@ func TestPodmanNonRootUserIntegration(t *testing.T) {
 	}
 	if !strings.Contains(exec.Stdout, "1000") || !strings.Contains(exec.Stdout, "nonroot-ok") {
 		t.Fatalf("Execute as uid 1000 stdout = %q, want it to contain \"1000\" and \"nonroot-ok\"", exec.Stdout)
+	}
+}
+
+// TestPodmanNonRootUserHomeWriteIntegration is the home-ownership
+// regression for df22639's chown: with [podman] user set to a non-root
+// uid, the container must be able to WRITE its own home, not just exec.
+// Ownership preservation chowns the extracted rootfs, which only a root
+// extractor can do — so when ESF runs unprivileged, Create must refuse
+// the run with ErrInvalidSpec instead of silently degrading (uid 1000
+// could exec but not write /home/esf). This test asserts both halves
+// of that contract, selected by the harness euid: unprivileged harnesses
+// get the ErrInvalidSpec rejection; root harnesses get a writable home.
+//
+// Podman-gated via integrationProvider (t.Skip when no podman binary).
+// The home-write half requires the podman template image with a uid-1000
+// home (/home/esf) and skips against images without one (e.g. plain
+// debian:trixie-slim), where there is no user-owned path to preserve.
+//
+// Run it on the reference host as root against the built template:
+//
+//	sudo -E env \
+//	  FACTORY_PODMAN_IMAGE=localhost/esf-template:debian13-node24 \
+//	  FACTORY_PODMAN_NETWORK=host \
+//	  FACTORY_PODMAN_CGROUP_MANAGER=cgroupfs \
+//	  FACTORY_PODMAN_STORAGE_ROOT=/home/<user>/.local/share/containers/storage \
+//	  FACTORY_PODMAN_RUN_ROOT=/home/<user>/.local/share/containers/runroot \
+//	  go test -tags=integration ./internal/sandbox/podman/ \
+//	    -run 'TestPodmanNonRootUser' -count=1 -v
+func TestPodmanNonRootUserHomeWriteIntegration(t *testing.T) {
+	ctx := context.Background()
+	p := integrationProvider(t, func(c *Config) { c.User = "1000" })
+
+	if os.Geteuid() != 0 {
+		sb, err := p.Create(ctx, sandbox.Spec{})
+		if !errors.Is(err, ErrInvalidSpec) {
+			t.Fatalf("Create(user=1000, non-root) = %+v, %v, want ErrInvalidSpec rejection", sb, err)
+		}
+		if sb != nil {
+			t.Fatalf("Create returned a sandbox alongside the rejection error")
+		}
+		return
+	}
+
+	sb, err := p.Create(ctx, sandbox.Spec{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	defer p.Destroy(ctx, sb.ID())
+
+	home := filepath.Join(p.cfg.StateDir, sb.ID(), "rootfs", "home", "esf")
+	fi, err := os.Stat(home)
+	if os.IsNotExist(err) {
+		t.Skip("requires template image with /home/esf owned by uid 1000 (e.g. build templates/podman); image has no user home to preserve")
+	}
+	if err != nil {
+		t.Fatalf("stat rootfs home: %v", err)
+	}
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok && st.Uid != 1000 {
+		t.Fatalf("rootfs /home/esf ownership = uid %d, want 1000 (ownership not preserved)", st.Uid)
+	}
+
+	exec, err := sb.Execute(ctx, sandbox.Command{Script: "echo home-ok > $HOME/esf-home-check.txt && cat $HOME/esf-home-check.txt"})
+	if err != nil || exec.ExitCode != 0 {
+		t.Fatalf("Execute writing $HOME as uid 1000: %+v, %v", exec, err)
+	}
+	if !strings.Contains(exec.Stdout, "home-ok") {
+		t.Fatalf("Execute $HOME write stdout = %q, want it to contain \"home-ok\"", exec.Stdout)
 	}
 }
 

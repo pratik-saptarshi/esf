@@ -47,4 +47,5 @@ RUN mkdir -p /workspace /run \
       'export PATH="/usr/local/bin:/usr/bin:/bin"' \
       'export NODE_EXTRA_CA_CERTS="/etc/ssl/certs/ca-certificates.crt"' \
       > /etc/profile.d/esf.sh \
- && useradd --create-home --uid 1000 esf
+ && useradd --create-home --uid 1000 esf \
+ && chown -R esf:esf /workspace

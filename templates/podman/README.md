@@ -87,6 +87,7 @@ storage_root = "/home/<user>/.local/share/containers/storage"
 run_root = "/home/<user>/.local/share/containers/runroot"
 # state_dir = ""             # defaults to <storage.data_dir>/podman-sandboxes
 # user = "esf"               # run sandbox commands as the template's esf user
+                           # REQUIRES ESF to run as root; see matrix below
 # command_output_bytes = 4194304
 # request_timeout = "60s"
 ```
@@ -145,9 +146,26 @@ through the existing paths. Because rootfs execution does not apply image
   runs. This is accepted and documented here deliberately: the provider never
   writes env values (or the argv carrying them) to its logs or state files,
   and evidence redaction is unchanged.
-- **Non-root execution.** Set `user = "esf"` in `[podman]` to run sandbox
-  commands as the template's unprivileged `esf` user (uid 1000) instead of
-  root.
+- **Non-root execution & the deployment matrix.** Set `user = "esf"` in
+  `[podman]` to run sandbox commands as the template's unprivileged `esf`
+  user (uid 1000) instead of root. Preserving the image's ownership at
+  extraction (so `/home/esf` stays owned by uid 1000 and writable by it)
+  works by chown, and only a **root** extractor can chown — so the matrix
+  is:
+
+  | ESF runs as | `user` | `Create` behavior |
+  | --- | --- | --- |
+  | root | set (e.g. `"esf"`) | Ownership preserved; uid 1000 can exec **and write `$HOME`**. |
+  | root | `""` | Runs as root (image default). Escape hatch unused. |
+  | non-root | set | `Create` **fails closed** with `ErrInvalidSpec` — no sandbox is created. |
+  | non-root | `""` | Runs with **known-degraded ownership**: paths stay owned by ESF's host user; uid 1000 can exec but cannot write its own home. |
+
+  On the reference host (rootful podman, storage under `/home/<user>`)
+  ESF is documented as a **non-root** user, so a non-empty `user` fails
+  closed there by design: extraction would silently skip the chown and
+  leave `/home/esf` provider-owned. To run with `user` set, run ESF as
+  **root** (rootful podman + ESF-as-root). To run ESF unprivileged,
+  leave `user = ""` and accept the degraded home.
 - **Destroy and sweeping.** `Destroy` removes the sandbox's state directory
   outright and is idempotent; one-shot containers are `--rm`, so a destroyed
   sandbox leaves nothing behind in `podman ps -a`. A state directory whose

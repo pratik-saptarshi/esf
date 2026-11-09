@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -551,6 +552,33 @@ func TestWriteReadFileRoundTrip(t *testing.T) {
 	}
 	if err := sb.WriteFile(ctx, "", data); !errors.Is(err, ErrInvalidSpec) {
 		t.Fatalf("WriteFile empty path: err = %v, want ErrInvalidSpec", err)
+	}
+}
+
+func TestReadWriteFileRejectsNonRegularFiles(t *testing.T) {
+	ctx := context.Background()
+	sb := testSandbox(t, &execFake{}, nil)
+
+	// Directory test: reading a directory path must be rejected as not a regular file
+	if err := os.MkdirAll(filepath.Join(sb.rootfs, "workspace", "dir"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if _, err := sb.ReadFile(ctx, "/workspace/dir"); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("ReadFile(dir) err = %v, want 'not a regular file'", err)
+	}
+
+	// FIFO test: reading or writing a FIFO must be rejected as not a regular file
+	fifoPath := filepath.Join(sb.rootfs, "workspace", "test.fifo")
+	if err := syscall.Mkfifo(fifoPath, 0o600); err != nil {
+		t.Skipf("mkfifo not supported: %v", err)
+	}
+
+	if _, err := sb.ReadFile(ctx, "/workspace/test.fifo"); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("ReadFile(fifo) err = %v, want 'not a regular file'", err)
+	}
+
+	if err := sb.WriteFile(ctx, "/workspace/test.fifo", []byte("data")); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("WriteFile(fifo) err = %v, want 'not a regular file'", err)
 	}
 }
 

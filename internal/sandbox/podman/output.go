@@ -18,7 +18,7 @@ import (
 // stderr, and the recorded exit code becomes 122. The final exit code
 // is written to exitFilePath (decision D5).
 func boundedCommandScript(line string, limit int64) string {
-	return fmt.Sprintf(`mkdir -p /run
+	return fmt.Sprintf(`mkdir -p /run 2>/dev/null || true
 esf_output_dir=$(mktemp -d) || exit 125
 trap 'rm -rf "$esf_output_dir"' EXIT
 mkfifo "$esf_output_dir/out.pipe" "$esf_output_dir/err.pipe" || exit 125
@@ -38,7 +38,7 @@ if [ "$(wc -c <"$esf_output_dir/out")" -gt %d ] || [ "$(wc -c <"$esf_output_dir/
   printf '\nESF_OUTPUT_LIMIT_EXCEEDED: output exceeded the %d byte per-stream limit\n' >&2
   esf_exit=122
 fi
-printf '%%s' "$esf_exit" > /run/esf-exit
+( printf '%%s' "$esf_exit" > /run/esf-exit ) 2>/dev/null || true
 exit "$esf_exit"
 `, limit+1, limit+1, line, limit, limit, limit, limit, limit)
 }

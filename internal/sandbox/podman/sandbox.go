@@ -220,6 +220,9 @@ func (s *podmanSandbox) WriteFile(ctx context.Context, path string, data []byte)
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return fmt.Errorf("create parent directory for %s in sandbox %s: %w", path, s.id, err)
 	}
+	if fi, err := os.Lstat(target); err == nil && !fi.Mode().IsRegular() {
+		return fmt.Errorf("write file %s in sandbox %s: not a regular file", path, s.id)
+	}
 	if err := os.WriteFile(target, data, 0o644); err != nil {
 		return fmt.Errorf("write file %s in sandbox %s: %w", path, s.id, err)
 	}
@@ -236,6 +239,13 @@ func (s *podmanSandbox) ReadFile(ctx context.Context, path string) ([]byte, erro
 	target, err := resolveInRootfs(s.rootfs, path)
 	if err != nil {
 		return nil, err
+	}
+	fi, err := os.Lstat(target)
+	if err != nil {
+		return nil, fmt.Errorf("read file %s in sandbox %s: %w", path, s.id, err)
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("read file %s in sandbox %s: not a regular file", path, s.id)
 	}
 	data, err := os.ReadFile(target)
 	if err != nil {
