@@ -206,43 +206,69 @@ func TestExecuteExitFileSymlinkDoesNotLeakHostFile(t *testing.T) {
 // with a symlink to a host directory, and os.Remove on the joined
 // exit-file path then deletes <host dir>/esf-exit. The stale removal
 // must resolve the parent through resolveInRootfs so the host-side
-// removal can never escape the rootfs.
+// removal can never escape the rootfs. An absolute symlink target is
+// reinterpreted as rootfs-relative (the kernel's view under
+// `podman run --rootfs`), so the parent resolves — to a path inside
+// the rootfs — and the removal is a contained no-op; the run proceeds.
 func TestExecuteStaleExitRemovalIgnoresRunSymlink(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		relative bool
-	}{
-		{name: "absolute symlink to host dir", relative: false},
-		{name: "relative symlink escaping rootfs", relative: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			hostDir := t.TempDir()
-			marker := filepath.Join(hostDir, "esf-exit")
-			if err := os.WriteFile(marker, []byte("HOST-MARKER\n"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			sb := testSandbox(t, &execFake{}, nil) // fake records no exit file
-			target := hostDir
-			if tc.relative {
-				rel, err := filepath.Rel(sb.rootfs, hostDir)
-				if err != nil {
-					t.Fatal(err)
-				}
-				target = rel
-			}
-			if err := os.Symlink(target, filepath.Join(sb.rootfs, "run")); err != nil {
-				t.Fatal(err)
-			}
-			// The fake records nothing, so Execute must fail with
-			// ErrUnavailable; the assertion that matters is that the
-			// stale-removal step did not delete the host marker.
-			if _, err := sb.Execute(context.Background(), sandbox.Command{Argv: []string{"true"}}); !errors.Is(err, ErrUnavailable) {
-				t.Fatalf("Execute: err = %v, want ErrUnavailable", err)
-			}
-			if _, err := os.Lstat(marker); err != nil {
-				t.Fatalf("stale-exit removal deleted the host file through the /run symlink: %v", err)
-			}
-		})
+	hostDir := t.TempDir()
+	marker := filepath.Join(hostDir, "esf-exit")
+	if err := os.WriteFile(marker, []byte("HOST-MARKER\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sb := testSandbox(t, &execFake{}, nil) // fake records no exit file
+	if err := os.Symlink(hostDir, filepath.Join(sb.rootfs, "run")); err != nil {
+		t.Fatal(err)
+	}
+	// The fake records nothing, so Execute must fail with
+	// ErrUnavailable; the assertion that matters is that the
+	// stale-removal step did not delete the host marker.
+	if _, err := sb.Execute(context.Background(), sandbox.Command{Argv: []string{"true"}}); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("Execute: err = %v, want ErrUnavailable", err)
+	}
+	if _, err := os.Lstat(marker); err != nil {
+		t.Fatalf("stale-exit removal deleted the host file through the /run symlink: %v", err)
+	}
+}
+
+// TestExecuteStaleExitRemovalAbortsOnEscapingRunSymlink pins the
+// failure contract when the exit file's parent cannot be resolved
+// inside the rootfs at all: a relative /run symlink that escapes the
+// rootfs makes resolveInRootfs fail, and Execute must abort with that
+// error instead of silently skipping the stale removal and running
+// the command anyway (owner-enforced shape from the PR #4 panel).
+// The host file behind the symlink must survive, and the command must
+// never run.
+func TestExecuteStaleExitRemovalAbortsOnEscapingRunSymlink(t *testing.T) {
+	hostDir := t.TempDir()
+	marker := filepath.Join(hostDir, "esf-exit")
+	if err := os.WriteFile(marker, []byte("HOST-MARKER\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fr := &execFake{} // fake records no exit file
+	sb := testSandbox(t, fr, nil)
+	rel, err := filepath.Rel(sb.rootfs, hostDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(rel, filepath.Join(sb.rootfs, "run")); err != nil {
+		t.Fatal(err)
+	}
+	_, err = sb.Execute(context.Background(), sandbox.Command{Argv: []string{"true"}})
+	if err == nil {
+		t.Fatal("Execute succeeded with an escaping /run symlink, want abort")
+	}
+	if errors.Is(err, ErrUnavailable) {
+		t.Fatalf("Execute: err = %v, want the stale-removal abort, not the post-run ErrUnavailable", err)
+	}
+	if !errors.Is(err, ErrInvalidSpec) || !strings.Contains(err.Error(), "stale exit file") {
+		t.Fatalf("Execute: err = %v, want the stale exit-file cleanup failure wrapping ErrInvalidSpec", err)
+	}
+	if len(fr.lastArgs) != 0 {
+		t.Fatalf("runner invoked despite the abort: args = %v", fr.lastArgs)
+	}
+	if _, err := os.Lstat(marker); err != nil {
+		t.Fatalf("stale-exit removal deleted the host file through the /run symlink: %v", err)
 	}
 }
 

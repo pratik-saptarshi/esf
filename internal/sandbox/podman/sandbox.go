@@ -44,8 +44,14 @@ func (s *podmanSandbox) Execute(ctx context.Context, cmd sandbox.Command) (sandb
 	}
 	p := s.provider
 	// Remove any stale exit file so a missing file after this run is
-	// unambiguously a transport failure (decision D5).
-	s.removeStaleExitFile()
+	// unambiguously a transport failure (decision D5). If the exit
+	// file's parent cannot be resolved inside the rootfs, abort: the
+	// post-run exit-file read resolves through the same chain and
+	// would fail anyway, and running the command first would only
+	// obscure which step is broken.
+	if err := s.removeStaleExitFile(); err != nil {
+		return sandbox.Execution{}, err
+	}
 
 	name := fmt.Sprintf("esf-run-%s-%d", s.id, p.seq.Add(1))
 	args := p.cfg.baseArgs()
@@ -125,15 +131,17 @@ func (s *podmanSandbox) Execute(ctx context.Context, cmd sandbox.Command) (sandb
 // <dir>/esf-exit. Resolving the parent first guarantees the removal
 // target stays inside the rootfs, and removing the final component
 // only never follows a symlink planted at the exit-file path itself.
-func (s *podmanSandbox) removeStaleExitFile() {
+// A parent that cannot be resolved inside the rootfs (e.g. a relative
+// symlink pointing outside) is an error, not a skip: Execute aborts
+// on it, since the post-run read of the new exit file resolves
+// through the same chain and cannot succeed either.
+func (s *podmanSandbox) removeStaleExitFile() error {
 	dir, err := resolveInRootfs(s.rootfs, filepath.Dir(exitFilePath))
 	if err != nil {
-		// The parent escapes the rootfs (e.g. a relative symlink
-		// pointing outside): there is no exit file inside the
-		// rootfs to remove.
-		return
+		return fmt.Errorf("remove stale exit file: %w", err)
 	}
 	_ = os.Remove(filepath.Join(dir, filepath.Base(exitFilePath)))
+	return nil
 }
 
 // maxExitFileBytes bounds the exit-code file read. A recorded exit code
