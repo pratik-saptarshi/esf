@@ -217,7 +217,18 @@ func (s *podmanSandbox) WriteFile(ctx context.Context, path string, data []byte)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+	parent := filepath.Dir(target)
+	var newDirs []string
+	if s.provider != nil && strings.TrimSpace(s.provider.cfg.User) != "" && os.Geteuid() == 0 {
+		for cur := parent; cur != "" && cur != s.rootfs && !strings.HasPrefix(s.rootfs, cur); cur = filepath.Dir(cur) {
+			if _, err := os.Lstat(cur); os.IsNotExist(err) {
+				newDirs = append(newDirs, cur)
+			} else {
+				break
+			}
+		}
+	}
+	if err := os.MkdirAll(parent, 0o755); err != nil {
 		return fmt.Errorf("create parent directory for %s in sandbox %s: %w", path, s.id, err)
 	}
 	if fi, err := os.Lstat(target); err == nil && !fi.Mode().IsRegular() {
@@ -226,7 +237,47 @@ func (s *podmanSandbox) WriteFile(ctx context.Context, path string, data []byte)
 	if err := os.WriteFile(target, data, 0o644); err != nil {
 		return fmt.Errorf("write file %s in sandbox %s: %w", path, s.id, err)
 	}
+	if s.provider != nil && strings.TrimSpace(s.provider.cfg.User) != "" && os.Geteuid() == 0 {
+		uid, gid, err := s.resolveUserIDs()
+		if err == nil {
+			for _, d := range newDirs {
+				_ = os.Lchown(d, uid, gid)
+			}
+			_ = os.Lchown(target, uid, gid)
+		}
+	}
 	return nil
+}
+
+func (s *podmanSandbox) resolveUserIDs() (int, int, error) {
+	if s.provider == nil {
+		return 0, 0, nil
+	}
+	user := strings.TrimSpace(s.provider.cfg.User)
+	if user == "" {
+		return 0, 0, nil
+	}
+	if user == "esf" {
+		return 1000, 1000, nil
+	}
+	if n, err := strconv.Atoi(user); err == nil {
+		return n, n, nil
+	}
+	passwdPath := filepath.Join(s.rootfs, "etc", "passwd")
+	data, err := os.ReadFile(passwdPath)
+	if err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			parts := strings.Split(line, ":")
+			if len(parts) >= 4 && parts[0] == user {
+				uid, errU := strconv.Atoi(parts[2])
+				gid, errG := strconv.Atoi(parts[3])
+				if errU == nil && errG == nil {
+					return uid, gid, nil
+				}
+			}
+		}
+	}
+	return 1000, 1000, nil
 }
 
 func (s *podmanSandbox) ReadFile(ctx context.Context, path string) ([]byte, error) {
