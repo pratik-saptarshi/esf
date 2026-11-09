@@ -199,6 +199,7 @@ func (p *Provider) materializeRootfs(ctx context.Context, image, id, rootfs stri
 		return fmt.Errorf("create export temp file: %w", err)
 	}
 	defer os.Remove(tmp.Name())
+	defer tmp.Close()
 	var errBuf strings.Builder
 	args := append(append([]string{}, p.cfg.baseArgs()...), "export", name)
 	code, runErr := p.run.Run(ctx, nil, tmp, &errBuf, args...)
