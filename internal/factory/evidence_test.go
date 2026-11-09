@@ -68,7 +68,7 @@ func (s secretLeakingStore) Write(path string, data []byte) error {
 // through the redactor. activities_lifecycle.go assigned err.Error() raw — the
 // only unredacted EvidenceError assignments in the codebase.
 func TestWriteInventoryRedactsEvidenceErrors(t *testing.T) {
-	const secret = "opaque-inventory-secret-1234"
+	const secret = "opaque-inventory-secret-1234" // gitleaks:allow
 	for _, mode := range []struct {
 		name       string
 		failForRun bool
