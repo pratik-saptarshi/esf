@@ -45,8 +45,7 @@ func (s *podmanSandbox) Execute(ctx context.Context, cmd sandbox.Command) (sandb
 	p := s.provider
 	// Remove any stale exit file so a missing file after this run is
 	// unambiguously a transport failure (decision D5).
-	exitHostPath := filepath.Join(s.rootfs, "run", "esf-exit")
-	_ = os.Remove(exitHostPath)
+	s.removeStaleExitFile()
 
 	name := fmt.Sprintf("esf-run-%s-%d", s.id, p.seq.Add(1))
 	args := p.cfg.baseArgs()
@@ -115,6 +114,26 @@ func (s *podmanSandbox) Execute(ctx context.Context, cmd sandbox.Command) (sandb
 	}
 	exec.ExitCode = n
 	return exec, nil
+}
+
+// removeStaleExitFile removes any exit file left by a previous run so
+// a missing file after this run is unambiguously a transport failure
+// (decision D5). The exit file's parent directory is resolved through
+// resolveInRootfs and only the final component is removed: if a prior
+// command replaced /run with a symlink to a host directory, os.Remove
+// on the joined path would follow the link and delete the host's
+// <dir>/esf-exit. Resolving the parent first guarantees the removal
+// target stays inside the rootfs, and removing the final component
+// only never follows a symlink planted at the exit-file path itself.
+func (s *podmanSandbox) removeStaleExitFile() {
+	dir, err := resolveInRootfs(s.rootfs, filepath.Dir(exitFilePath))
+	if err != nil {
+		// The parent escapes the rootfs (e.g. a relative symlink
+		// pointing outside): there is no exit file inside the
+		// rootfs to remove.
+		return
+	}
+	_ = os.Remove(filepath.Join(dir, filepath.Base(exitFilePath)))
 }
 
 // maxExitFileBytes bounds the exit-code file read. A recorded exit code

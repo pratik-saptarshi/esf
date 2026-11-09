@@ -199,6 +199,104 @@ func TestExecuteExitFileSymlinkDoesNotLeakHostFile(t *testing.T) {
 	}
 }
 
+// TestExecuteStaleExitRemovalIgnoresRunSymlink is the regression test
+// for the stale-exit-file removal following a planted /run symlink
+// (Codex P1 on PR #4): a prior sandbox command can replace <rootfs>/run
+// with a symlink to a host directory, and os.Remove on the joined
+// exit-file path then deletes <host dir>/esf-exit. The stale removal
+// must resolve the parent through resolveInRootfs so the host-side
+// removal can never escape the rootfs.
+func TestExecuteStaleExitRemovalIgnoresRunSymlink(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		relative bool
+	}{
+		{name: "absolute symlink to host dir", relative: false},
+		{name: "relative symlink escaping rootfs", relative: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			hostDir := t.TempDir()
+			marker := filepath.Join(hostDir, "esf-exit")
+			if err := os.WriteFile(marker, []byte("HOST-MARKER\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			sb := testSandbox(t, &execFake{}, nil) // fake records no exit file
+			target := hostDir
+			if tc.relative {
+				rel, err := filepath.Rel(sb.rootfs, hostDir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				target = rel
+			}
+			if err := os.Symlink(target, filepath.Join(sb.rootfs, "run")); err != nil {
+				t.Fatal(err)
+			}
+			// The fake records nothing, so Execute must fail with
+			// ErrUnavailable; the assertion that matters is that the
+			// stale-removal step did not delete the host marker.
+			if _, err := sb.Execute(context.Background(), sandbox.Command{Argv: []string{"true"}}); !errors.Is(err, ErrUnavailable) {
+				t.Fatalf("Execute: err = %v, want ErrUnavailable", err)
+			}
+			if _, err := os.Lstat(marker); err != nil {
+				t.Fatalf("stale-exit removal deleted the host file through the /run symlink: %v", err)
+			}
+		})
+	}
+}
+
+// TestExecuteStaleExitRemovalClearsRealExitFile pins the normal case:
+// with a real /run directory the stale exit file from a previous run
+// is still removed, so a missing exit file after this run remains
+// unambiguously a transport failure (decision D5).
+func TestExecuteStaleExitRemovalClearsRealExitFile(t *testing.T) {
+	sb := testSandbox(t, &execFake{}, nil) // fake records no exit file
+	if err := os.MkdirAll(filepath.Join(sb.rootfs, "run"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(sb.rootfs, "run", "esf-exit")
+	if err := os.WriteFile(stale, []byte("0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sb.Execute(context.Background(), sandbox.Command{Argv: []string{"true"}}); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("Execute: err = %v, want ErrUnavailable", err)
+	}
+	if _, err := os.Lstat(stale); !os.IsNotExist(err) {
+		t.Fatalf("stale exit file still present after Execute: %v", err)
+	}
+}
+
+// TestExecuteStaleExitRemovalDeletesLinkNotTarget pins the helper's
+// contract when the exit file itself is a symlink to a host file in an
+// otherwise real /run directory: the stale removal deletes the link,
+// never the file it points at (os.Remove semantics on the final
+// component).
+func TestExecuteStaleExitRemovalDeletesLinkNotTarget(t *testing.T) {
+	hostFile := filepath.Join(t.TempDir(), "host-target")
+	const body = "HOST-TARGET-BODY\n"
+	if err := os.WriteFile(hostFile, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sb := testSandbox(t, &execFake{}, nil) // fake records no exit file
+	if err := os.MkdirAll(filepath.Join(sb.rootfs, "run"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(sb.rootfs, "run", "esf-exit")
+	if err := os.Symlink(hostFile, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sb.Execute(context.Background(), sandbox.Command{Argv: []string{"true"}}); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("Execute: err = %v, want ErrUnavailable", err)
+	}
+	if _, err := os.Lstat(link); !os.IsNotExist(err) {
+		t.Fatalf("stale exit-file symlink still present after Execute: %v", err)
+	}
+	data, err := os.ReadFile(hostFile)
+	if err != nil || string(data) != body {
+		t.Fatalf("host target = %q, %v; want untouched %q", data, err, body)
+	}
+}
+
 func TestExecuteTimeoutKillsContainer(t *testing.T) {
 	fr := &execFake{blockRun: true}
 	sb := testSandbox(t, fr, nil)
