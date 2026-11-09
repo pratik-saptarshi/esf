@@ -582,6 +582,120 @@ func TestReadWriteFileRejectsNonRegularFiles(t *testing.T) {
 	}
 }
 
+// TestReadPasswdRejectsSpecialFile pins the sandbox-user lookup's read
+// discipline: /etc/passwd is sandbox-controlled, so a planted FIFO must
+// be rejected as a non-regular file instead of blocking the host read
+// forever.
+func TestReadPasswdRejectsSpecialFile(t *testing.T) {
+	ctx := context.Background()
+	sb := testSandbox(t, &execFake{}, nil)
+
+	passwd := filepath.Join(sb.rootfs, "etc", "passwd")
+	if err := os.MkdirAll(filepath.Dir(passwd), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(passwd, 0o600); err != nil {
+		t.Skipf("mkfifo not supported: %v", err)
+	}
+
+	done := make(chan struct{})
+	var data []byte
+	var err error
+	go func() {
+		data, err = sb.readPasswd(ctx)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("readPasswd blocked on a FIFO /etc/passwd")
+	}
+	if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("readPasswd(fifo) = %q, %v; want 'not a regular file'", data, err)
+	}
+}
+
+// TestReadPasswdSymlinkStaysInRootfs pins containment: an absolute
+// symlink planted at /etc/passwd must resolve inside the rootfs, never
+// to the host target it names.
+func TestReadPasswdSymlinkStaysInRootfs(t *testing.T) {
+	ctx := context.Background()
+	sb := testSandbox(t, &execFake{}, nil)
+
+	hostFile := filepath.Join(t.TempDir(), "host-passwd")
+	if err := os.WriteFile(hostFile, []byte("hostuser:x:1:1::/:/bin/sh\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	etc := filepath.Join(sb.rootfs, "etc")
+	if err := os.MkdirAll(etc, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(hostFile, filepath.Join(etc, "passwd")); err != nil {
+		t.Fatal(err)
+	}
+	// The absolute target is reinterpreted rootfs-relative: place
+	// distinguishable content at that contained path and require the read
+	// to return it — never the host file's bytes.
+	contained := filepath.Join(sb.rootfs, strings.TrimPrefix(hostFile, string(filepath.Separator)))
+	if err := os.MkdirAll(filepath.Dir(contained), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(contained, []byte("contained:x:4321:4321::/:/bin/sh\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := sb.readPasswd(ctx)
+	if err != nil {
+		t.Fatalf("readPasswd: %v", err)
+	}
+	if !strings.Contains(string(data), "contained:x:4321:4321") || strings.Contains(string(data), "hostuser:x:1:1") {
+		t.Fatalf("readPasswd = %q; want the rootfs-contained target, not the host file", data)
+	}
+}
+
+// TestReadPasswdBoundsRead pins the size bound: a sandbox-controlled
+// /etc/passwd larger than the bound is rejected unread instead of being
+// buffered into worker memory.
+func TestReadPasswdBoundsRead(t *testing.T) {
+	ctx := context.Background()
+	sb := testSandbox(t, &execFake{}, nil)
+
+	passwd := filepath.Join(sb.rootfs, "etc", "passwd")
+	if err := os.MkdirAll(filepath.Dir(passwd), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(passwd, bytes.Repeat([]byte("x"), maxPasswdFileBytes+1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sb.readPasswd(ctx); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("readPasswd(oversized) err = %v, want an 'exceeds' bound error", err)
+	}
+}
+
+// TestResolveUserIDsParsesPasswd pins the happy path: a named user found
+// in the sandbox /etc/passwd resolves to its uid/gid.
+func TestResolveUserIDsParsesPasswd(t *testing.T) {
+	ctx := context.Background()
+	sb := testSandbox(t, &execFake{}, nil)
+	sb.provider.cfg.User = "someuser"
+
+	passwd := filepath.Join(sb.rootfs, "etc", "passwd")
+	if err := os.MkdirAll(filepath.Dir(passwd), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := "root:x:0:0:root:/root:/bin/sh\nsomeuser:x:4321:4322::/home/someuser:/bin/sh\n"
+	if err := os.WriteFile(passwd, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	uid, gid, err := sb.resolveUserIDs(ctx)
+	if err != nil {
+		t.Fatalf("resolveUserIDs: %v", err)
+	}
+	if uid != 4321 || gid != 4322 {
+		t.Fatalf("resolveUserIDs = (%d, %d), want (4321, 4322)", uid, gid)
+	}
+}
+
 // TestResolveInRootfsDeepPlainPath is the regression test for the hop
 // budget counting every path component instead of only symlink
 // expansions: a path through more than 16 perfectly ordinary

@@ -238,7 +238,7 @@ func (s *podmanSandbox) WriteFile(ctx context.Context, path string, data []byte)
 		return fmt.Errorf("write file %s in sandbox %s: %w", path, s.id, err)
 	}
 	if s.provider != nil && strings.TrimSpace(s.provider.cfg.User) != "" && os.Geteuid() == 0 {
-		uid, gid, err := s.resolveUserIDs()
+		uid, gid, err := s.resolveUserIDs(ctx)
 		if err == nil {
 			for _, d := range newDirs {
 				_ = os.Lchown(d, uid, gid)
@@ -249,7 +249,49 @@ func (s *podmanSandbox) WriteFile(ctx context.Context, path string, data []byte)
 	return nil
 }
 
-func (s *podmanSandbox) resolveUserIDs() (int, int, error) {
+// maxPasswdFileBytes bounds the sandbox /etc/passwd read. A passwd file
+// is a handful of short lines; anything larger was not produced by the
+// image and is rejected unread.
+const maxPasswdFileBytes = 64 << 10
+
+// readPasswd reads the sandbox /etc/passwd through the validated rootfs
+// path — the same discipline as ReadFile and readExitFile. The file is
+// sandbox-controlled: resolving through resolveInRootfs guarantees the
+// bytes come from a plain file inside the rootfs (a planted symlink can
+// never steer the host-side read to a host target), and the bounded,
+// regular-file-only read guarantees a planted FIFO, device, or symlink
+// cannot block the worker or exhaust its memory.
+func (s *podmanSandbox) readPasswd(ctx context.Context) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	target, err := resolveInRootfs(s.rootfs, "/etc/passwd")
+	if err != nil {
+		return nil, err
+	}
+	fi, err := os.Lstat(target)
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, errors.New("sandbox passwd file is not a regular file")
+	}
+	f, err := os.Open(target)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, maxPasswdFileBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxPasswdFileBytes {
+		return nil, fmt.Errorf("sandbox passwd file exceeds %d bytes", maxPasswdFileBytes)
+	}
+	return data, nil
+}
+
+func (s *podmanSandbox) resolveUserIDs(ctx context.Context) (int, int, error) {
 	if s.provider == nil {
 		return 0, 0, nil
 	}
@@ -263,8 +305,7 @@ func (s *podmanSandbox) resolveUserIDs() (int, int, error) {
 	if n, err := strconv.Atoi(user); err == nil {
 		return n, n, nil
 	}
-	passwdPath := filepath.Join(s.rootfs, "etc", "passwd")
-	data, err := os.ReadFile(passwdPath)
+	data, err := s.readPasswd(ctx)
 	if err == nil {
 		for _, line := range strings.Split(string(data), "\n") {
 			parts := strings.Split(line, ":")
