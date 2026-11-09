@@ -114,7 +114,7 @@ func NewRuntime(ctx context.Context, opts RuntimeOptions) (*Runtime, error) {
 // Close releases resources held by the runtime.
 func (r *Runtime) Close(ctx context.Context) error {
 	var firstErr error
-	if closer, ok := r.Provider.(interface{ Close() error }); ok {
+	if closer, ok := r.Provider.(sandbox.Closer); ok {
 		if err := closer.Close(); err != nil {
 			firstErr = err
 		}

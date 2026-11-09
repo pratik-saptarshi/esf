@@ -19,7 +19,8 @@ import (
 // (Suspender, Previewer, Stater) that inner implements — no more —
 // because the factory detects optional support by type assertion and
 // must keep recording SKIPPED for providers without them. The same
-// holds for the decorated sandbox and NetworkUpdater.
+// holds for the decorated sandbox and NetworkUpdater, and Close for
+// providers that support it.
 func WrapProvider(inner Provider) Provider {
 	tel := telemetryFromEnv()
 	if tel == nil {
@@ -35,8 +36,18 @@ func wrapTracedProvider(inner Provider, tel *telemetry) Provider {
 	_, suspender := inner.(Suspender)
 	_, previewer := inner.(Previewer)
 	_, stater := inner.(Stater)
+	_, hasCloser := inner.(Closer)
 	switch {
 	case suspender && previewer && stater:
+		if hasCloser {
+			return struct {
+				Provider
+				Suspender
+				Previewer
+				Stater
+				Closer
+			}{tp, tp, tp, tp, tp}
+		}
 		return struct {
 			Provider
 			Suspender
@@ -44,39 +55,90 @@ func wrapTracedProvider(inner Provider, tel *telemetry) Provider {
 			Stater
 		}{tp, tp, tp, tp}
 	case suspender && previewer:
+		if hasCloser {
+			return struct {
+				Provider
+				Suspender
+				Previewer
+				Closer
+			}{tp, tp, tp, tp}
+		}
 		return struct {
 			Provider
 			Suspender
 			Previewer
 		}{tp, tp, tp}
 	case suspender && stater:
+		if hasCloser {
+			return struct {
+				Provider
+				Suspender
+				Stater
+				Closer
+			}{tp, tp, tp, tp}
+		}
 		return struct {
 			Provider
 			Suspender
 			Stater
 		}{tp, tp, tp}
 	case previewer && stater:
+		if hasCloser {
+			return struct {
+				Provider
+				Previewer
+				Stater
+				Closer
+			}{tp, tp, tp, tp}
+		}
 		return struct {
 			Provider
 			Previewer
 			Stater
 		}{tp, tp, tp}
 	case suspender:
+		if hasCloser {
+			return struct {
+				Provider
+				Suspender
+				Closer
+			}{tp, tp, tp}
+		}
 		return struct {
 			Provider
 			Suspender
 		}{tp, tp}
 	case previewer:
+		if hasCloser {
+			return struct {
+				Provider
+				Previewer
+				Closer
+			}{tp, tp, tp}
+		}
 		return struct {
 			Provider
 			Previewer
 		}{tp, tp}
 	case stater:
+		if hasCloser {
+			return struct {
+				Provider
+				Stater
+				Closer
+			}{tp, tp, tp}
+		}
 		return struct {
 			Provider
 			Stater
 		}{tp, tp}
 	default:
+		if hasCloser {
+			return struct {
+				Provider
+				Closer
+			}{tp, tp}
+		}
 		// Even the base case goes through an anonymous struct:
 		// tracedProvider itself implements the optional interfaces
 		// by delegation, and returning it bare would expose them
@@ -163,6 +225,18 @@ func (p *tracedProvider) Ping(ctx context.Context) error {
 	err := p.inner.Ping(ctx)
 	rec.finish(err)
 	return err
+}
+
+// Close implements Closer by delegation, with no span: closing the
+// provider releases resources (for example, a client SDK's idle
+// connections) and must reach the inner provider whenever it supports
+// closing.
+func (p *tracedProvider) Close() error {
+	closer, ok := p.inner.(Closer)
+	if !ok {
+		return nil
+	}
+	return closer.Close()
 }
 
 // Suspend implements Suspender by delegation, with a span.

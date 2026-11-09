@@ -44,6 +44,16 @@ type Stater interface {
 	SandboxState(ctx context.Context, sandboxID string) (string, error)
 }
 
+// Closer is implemented by providers that hold resources which must be
+// released when the runtime closes (for example, a client SDK's idle
+// connection pool). The factory detects support by type assertion and
+// skips cleanup for providers without it, so the interface stays optional
+// exactly like Suspender, Previewer and Stater.
+type Closer interface {
+	// Close releases the provider's resources. It must be idempotent.
+	Close() error
+}
+
 // StatePaused is the provider state reported for a checkpointed sandbox.
 const StatePaused = "paused"
 

@@ -264,6 +264,9 @@ func TestTracedProviderPreservesOptionalInterfaces(t *testing.T) {
 	if _, ok := full.(Stater); !ok {
 		t.Error("wrapped Fake lost Stater")
 	}
+	if _, ok := full.(Closer); ok {
+		t.Error("wrapped Fake gained Closer")
+	}
 
 	minimal := WrapProvider(minimalProvider{})
 	if _, ok := minimal.(Suspender); ok {
@@ -274,6 +277,33 @@ func TestTracedProviderPreservesOptionalInterfaces(t *testing.T) {
 	}
 	if _, ok := minimal.(Stater); ok {
 		t.Error("wrapped minimal provider gained Stater")
+	}
+	if _, ok := minimal.(Closer); ok {
+		t.Error("wrapped minimal provider gained Closer")
+	}
+}
+
+// closerProvider implements Provider plus the optional Closer, so the
+// wrapper must keep Close and delegate to it whenever telemetry wraps.
+type closerProvider struct {
+	minimalProvider
+	closeErr error
+}
+
+func (p *closerProvider) Close() error { return p.closeErr }
+
+// The decorated provider must expose Closer exactly when the inner
+// provider implements it: the factory closes the provider it wrapped, so
+// losing Close would skip provider cleanup entirely.
+func TestTracedProviderPreservesCloser(t *testing.T) {
+	telemetryFile(t)
+	wrapped := WrapProvider(&closerProvider{closeErr: errors.New("close-boom")})
+	if _, ok := wrapped.(Closer); !ok {
+		t.Fatal("wrapped provider lost Closer")
+	}
+	closer := wrapped.(Closer)
+	if err := closer.Close(); err == nil || err.Error() != "close-boom" {
+		t.Fatalf("Close = %v, want the delegated error", err)
 	}
 }
 
