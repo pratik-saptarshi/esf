@@ -223,6 +223,24 @@ func TestExecuteBoundedScriptContract(t *testing.T) {
 	}
 }
 
+// TestBoundedScriptTrailingCommentAndHeredoc pins the subshell
+// formatting: the rendered command must sit on its own lines inside
+// the wrapper's subshell. A trailing `# comment` would otherwise
+// comment out the closing parenthesis, and a here-document delimiter
+// would no longer be a standalone terminator — both are syntax errors
+// that prevent sandbox preparation (review finding on output.go).
+func TestBoundedScriptTrailingCommentAndHeredoc(t *testing.T) {
+	code, stdout, _, _, _, _ := runBoundedScript(t, "echo ok # final comment", 2048)
+	if code != 0 || !strings.Contains(stdout, "ok") {
+		t.Fatalf("trailing-comment command: code=%d stdout=%q, want 0 and ok", code, stdout)
+	}
+	heredoc := "cat <<'EOF'\nhello heredoc\nEOF"
+	code, stdout, _, _, _, _ = runBoundedScript(t, heredoc, 2048)
+	if code != 0 || !strings.Contains(stdout, "hello heredoc") {
+		t.Fatalf("heredoc command: code=%d stdout=%q, want 0 and hello heredoc", code, stdout)
+	}
+}
+
 // runBoundedScript executes boundedCommandScript under the host bash
 // with TMPDIR pointed at a test-controlled directory and samples the
 // total regular-file bytes stored under it while the script runs. It
