@@ -698,6 +698,29 @@ func TestReadPasswdBoundsRead(t *testing.T) {
 	}
 }
 
+// TestReadFileBoundsOversizedRead pins the host-memory bound: a sandbox-
+// controlled regular file larger than the bound — for example a sparse file
+// an agent created — is rejected instead of being buffered into worker
+// memory.
+func TestReadFileBoundsOversizedRead(t *testing.T) {
+	ctx := context.Background()
+	sb := testSandbox(t, &execFake{}, nil)
+
+	target := filepath.Join(sb.rootfs, "workspace", "huge.bin")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(target, maxFileReadBytes+1); err != nil {
+		t.Skipf("truncate not supported: %v", err)
+	}
+	if _, err := sb.ReadFile(ctx, "/workspace/huge.bin"); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("ReadFile(oversized) err = %v, want an 'exceeds' bound error", err)
+	}
+}
+
 // TestResolveUserIDsParsesPasswd pins the happy path: a named user found
 // in the sandbox /etc/passwd resolves to its uid/gid.
 func TestResolveUserIDsParsesPasswd(t *testing.T) {

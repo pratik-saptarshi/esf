@@ -262,6 +262,14 @@ func (s *podmanSandbox) WriteFile(ctx context.Context, path string, data []byte)
 // image and is rejected unread.
 const maxPasswdFileBytes = 64 << 10
 
+// maxFileReadBytes bounds a sandbox-controlled file read in ReadFile.
+// ReadFile serves both small sentinels (the blocked signal) and larger
+// payloads (lockfile hashing, captured command output), so the bound is
+// generous — but finite: a sparse file an agent created must not be able
+// to exhaust host memory. readExitFile and readPasswd bound their own,
+// purpose-specific reads.
+const maxFileReadBytes = 16 << 20
+
 // readPasswd reads the sandbox /etc/passwd through the validated rootfs
 // path — the same discipline as ReadFile and readExitFile. The file is
 // sandbox-controlled: resolving through resolveInRootfs guarantees the
@@ -347,9 +355,17 @@ func (s *podmanSandbox) ReadFile(ctx context.Context, path string) ([]byte, erro
 	if !fi.Mode().IsRegular() {
 		return nil, fmt.Errorf("read file %s in sandbox %s: not a regular file", path, s.id)
 	}
-	data, err := os.ReadFile(target)
+	f, err := os.Open(target)
 	if err != nil {
 		return nil, fmt.Errorf("read file %s in sandbox %s: %w", path, s.id, err)
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, maxFileReadBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read file %s in sandbox %s: %w", path, s.id, err)
+	}
+	if len(data) > maxFileReadBytes {
+		return nil, fmt.Errorf("read file %s in sandbox %s: exceeds %d bytes", path, s.id, maxFileReadBytes)
 	}
 	return data, nil
 }
