@@ -1,0 +1,20 @@
+# Default owner for all files
+* @pratik-saptarshi
+
+# CI, workflows, and repository automation
+/.github/ @pratik-saptarshi
+
+# Release inventory, provenance, and qualification metadata
+/release/ @pratik-saptarshi
+/internal/releaseinfo/ @pratik-saptarshi
+/scripts/verify-release-inventory.py @pratik-saptarshi
+
+# Deployment, supply-chain, and image definitions
+/deploy/ @pratik-saptarshi
+/deployments/ @pratik-saptarshi
+
+# Agent runtimes and packaged harness assets
+/agents/ @pratik-saptarshi
+
+# Security policy
+/SECURITY.md @pratik-saptarshi

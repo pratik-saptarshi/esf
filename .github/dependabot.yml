@@ -62,6 +62,24 @@ updates:
       opencode-compatibility:
         patterns:
           - "@opencode/*"
+  - package-ecosystem: npm
+    directory: /agents/pi
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    groups:
+      pi-production:
+        dependency-type: production
+        update-types:
+          - minor
+          - patch
+      pi-development:
+        dependency-type: development
+        update-types:
+          - minor
+          - patch
+
   - package-ecosystem: uv
     directory: /
     schedule:

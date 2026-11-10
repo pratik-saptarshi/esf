@@ -3,16 +3,16 @@
 ## Reporting
 
 Report vulnerabilities privately through
-[GitHub Security Advisories](https://github.com/mitkox/esf/security/advisories/new).
+[GitHub Security Advisories](https://github.com/pratik-saptarshi/esf/security/advisories/new).
 Do not include real credentials or private repository data in reports, and do
 not open public issues for unpatched vulnerabilities.
 
 ## Supported versions
 
 ESF is under active development. Only the latest release and the latest
-commit on `master` receive security fixes. Go 1.27.3 is the pinned supported
-toolchain. Dependency and toolchain minimums may increase when a security fix
-requires it.
+commit on the default branch (`develop`) receive security fixes. Go 1.27.3 is
+the pinned supported toolchain. Dependency and toolchain minimums may increase
+when a security fix requires it.
 
 ## Trust model
 
