@@ -45,7 +45,7 @@
     "sqlite": "1.60.1",
     "dspy": "3.4.1",
     "frontend": {
-      "vite": "8.3.4",
+      "vite": "8.3.5",
       "lucide": "1.57.0",
       "jsdom": "30.1.2",
       "react": "19.3.1",
@@ -69,7 +69,7 @@
     }
   },
   "toolchains": {
-    "go": "1.27.2",
+    "go": "1.27.3",
     "node": "26.12.0",
     "python_optional": "3.15.0",
     "kubernetes_qualification": "1.37.1",
@@ -77,7 +77,7 @@
     "uv": "0.13.1"
   },
   "build_bases": {
-    "go": "docker.io/library/golang@sha256:820153096fda4de6ac1b7194d12e416b7dd8f4e9a33d17e0345b111b945162d8",
+    "go": "docker.io/library/golang@sha256:e519d3b0a5b285e5aa53ab9eef02bc6bbb9cb04608389b743a136a9ce75f0d1e",
     "runtime": "gcr.io/distroless/static-debian13@sha256:58133991db06659feaabe0f4e97a35cebf15ef4ea08f8a4c6d2ee5f75e4aa6a0",
     "worker": "docker.io/library/debian@sha256:eb593cf2c358cacef45ca0a424bbc7d30cfa3466265fc2662b9466a0ca6ba1c5",
     "python": "docker.io/library/python@sha256:f48fda6d59b2b3437781d1c3ccf4aa0e26ae871de3cdd758b49ab45ee7291619",
