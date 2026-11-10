@@ -232,6 +232,18 @@ type NetworkUpdater interface {
 	UpdateNetwork(ctx context.Context, network Network) error
 }
 
+// DefaultTemplater is implemented by providers that resolve a default
+// template when a spec does not name one (for example, the podman
+// provider's [podman] image). The factory uses it to compute the same
+// template the provider will actually use, so create recovery compares
+// like with like instead of failing on a provider default the activity
+// never saw.
+type DefaultTemplater interface {
+	// DefaultTemplate returns the template Create falls back to when the
+	// spec's template is empty, or "" when the provider has no default.
+	DefaultTemplate() string
+}
+
 // Provider creates, reattaches to, and destroys sandboxes.
 type Provider interface {
 	// Name identifies the provider in evidence (for example "cubesandbox").

@@ -146,6 +146,62 @@ func TestWorkflowRecoversLostCreateResponse(t *testing.T) {
 	}
 }
 
+// defaultTemplateProvider models a provider (like podman) whose Create
+// resolves a provider-specific default template when the spec names none.
+type defaultTemplateProvider struct {
+	*sandbox.Fake
+	defaultTemplate string
+}
+
+func (p *defaultTemplateProvider) DefaultTemplate() string { return p.defaultTemplate }
+
+func (p *defaultTemplateProvider) Create(ctx context.Context, spec sandbox.Spec) (sandbox.Sandbox, error) {
+	if spec.Template == "" {
+		spec.Template = p.defaultTemplate
+	}
+	return p.Fake.Create(ctx, spec)
+}
+
+// lostCreateDefaultTemplateProvider combines the provider default with a
+// lost create response: the sandbox is created but the acknowledgement is
+// dropped, so the workflow must recover it on retry.
+type lostCreateDefaultTemplateProvider struct {
+	*defaultTemplateProvider
+}
+
+func (p *lostCreateDefaultTemplateProvider) Create(ctx context.Context, spec sandbox.Spec) (sandbox.Sandbox, error) {
+	if _, err := p.defaultTemplateProvider.Create(ctx, spec); err != nil {
+		return nil, err
+	}
+	return nil, fmt.Errorf("create response lost")
+}
+
+// TestWorkflowRecoversLostCreateResponseWithProviderDefaultTemplate pins the
+// recovery comparison against a provider default: with neither a cube
+// template nor an explicit run template, a retried create must recover the
+// acknowledged sandbox instead of failing the template comparison on the
+// provider's own default image.
+func TestWorkflowRecoversLostCreateResponseWithProviderDefaultTemplate(t *testing.T) {
+	const defaultImage = "localhost/esf:test"
+	p := &lostCreateDefaultTemplateProvider{&defaultTemplateProvider{Fake: sandbox.NewFake(), defaultTemplate: defaultImage}}
+	p.ExecuteFunc = wrapWithBuildSuccess(gitAwareExecute("patch"))
+	manifest, err := runWorkflowOpts(t, p, baseRequest(t), workflowRunOptions{
+		mutateConfig: func(cfg *Config) {
+			cfg.Cube.TemplateID = ""
+			cfg.Podman.Image = defaultImage
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.FactoryResult != StateSucceeded {
+		t.Fatalf("recovery failed: %+v", manifest)
+	}
+	if len(p.Created()) != 1 || len(p.Live()) != 0 {
+		t.Fatalf("created=%v, live=%v", p.Created(), p.Live())
+	}
+}
+
 func TestCleanupOwnershipExcludesOtherExecutions(t *testing.T) {
 	for _, tc := range []struct {
 		origin, run, execution string

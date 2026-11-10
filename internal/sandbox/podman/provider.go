@@ -61,6 +61,10 @@ func New(cfg Config, opts ...Option) (*Provider, error) {
 
 func (p *Provider) Name() string { return ProviderName }
 
+// DefaultTemplate returns the configured [podman] image, which Create uses
+// when a spec does not name a template.
+func (p *Provider) DefaultTemplate() string { return strings.TrimSpace(p.cfg.Image) }
+
 // Capabilities is deliberately all-false: the one-shot container model
 // has no snapshot, clone, suspend, resume, or preview semantics, and the
 // factory degrades those features by design when they are absent.

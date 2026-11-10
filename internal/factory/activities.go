@@ -602,7 +602,7 @@ func (a *Activities) CreateSandbox(ctx context.Context, in CreateSandboxInput) (
 
 	template := in.Template
 	if template == "" {
-		template = a.cfg.Cube.TemplateID
+		template = a.defaultTemplate()
 	}
 	spec := sandbox.Spec{
 		Template: template,
@@ -671,6 +671,20 @@ func (a *Activities) CreateSandbox(ctx context.Context, in CreateSandboxInput) (
 		slog.String("sandbox.id", out.SandboxID),
 		slog.String("sandbox.template", out.Template))
 	return out, nil
+}
+
+// defaultTemplate resolves the template Create falls back to when the run
+// does not name one, so the recovery comparison below matches the template
+// the provider actually used. A provider's default is not visible to the
+// activity (podman's is the [podman] image, not the cube template), so
+// providers that have one report it through sandbox.DefaultTemplater.
+func (a *Activities) defaultTemplate() string {
+	if dt, ok := a.provider.(sandbox.DefaultTemplater); ok {
+		if t := dt.DefaultTemplate(); t != "" {
+			return t
+		}
+	}
+	return a.cfg.Cube.TemplateID
 }
 
 // PrepareSandbox provisions the coding agent into the sandbox.
