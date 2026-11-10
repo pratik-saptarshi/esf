@@ -46,7 +46,7 @@
     "dspy": "3.4.1",
     "frontend": {
       "vite": "8.3.5",
-      "lucide": "1.57.0",
+      "lucide": "1.70.0",
       "jsdom": "30.1.2",
       "react": "19.3.1",
       "tailwind": "4.3.3"
