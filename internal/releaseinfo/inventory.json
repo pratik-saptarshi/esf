@@ -18,8 +18,8 @@
       "server": "1.32.1",
       "admin_tools": "1.32.1",
       "ui": "2.56.0",
-      "go_sdk": "1.49.0",
-      "api": "1.63.7",
+      "go_sdk": "1.50.0",
+      "api": "1.64.2",
       "qualification": "candidate; replay and deployment validation pending"
     },
     "opencode": {
@@ -40,7 +40,7 @@
       "license": "MIT",
       "qualification": "release checksums and local-model factory acceptance passed; hosted-provider qualification pending"
     },
-    "grpc": "1.84.0",
+    "grpc": "1.85.0",
     "otel": "1.47.0",
     "sqlite": "1.61.1",
     "dspy": "3.4.1",
