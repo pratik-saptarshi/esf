@@ -267,6 +267,9 @@ func TestTracedProviderPreservesOptionalInterfaces(t *testing.T) {
 	if _, ok := full.(Closer); ok {
 		t.Error("wrapped Fake gained Closer")
 	}
+	if _, ok := full.(DefaultTemplater); ok {
+		t.Error("wrapped Fake gained DefaultTemplater")
+	}
 
 	minimal := WrapProvider(minimalProvider{})
 	if _, ok := minimal.(Suspender); ok {
@@ -280,6 +283,9 @@ func TestTracedProviderPreservesOptionalInterfaces(t *testing.T) {
 	}
 	if _, ok := minimal.(Closer); ok {
 		t.Error("wrapped minimal provider gained Closer")
+	}
+	if _, ok := minimal.(DefaultTemplater); ok {
+		t.Error("wrapped minimal provider gained DefaultTemplater")
 	}
 }
 
@@ -304,6 +310,51 @@ func TestTracedProviderPreservesCloser(t *testing.T) {
 	closer := wrapped.(Closer)
 	if err := closer.Close(); err == nil || err.Error() != "close-boom" {
 		t.Fatalf("Close = %v, want the delegated error", err)
+	}
+}
+
+// templaterProvider implements Provider plus the optional
+// DefaultTemplater, so the wrapper must keep DefaultTemplate and
+// delegate to it whenever telemetry wraps.
+type templaterProvider struct {
+	minimalProvider
+	template string
+}
+
+func (p *templaterProvider) DefaultTemplate() string { return p.template }
+
+// templaterFake is the full Fake plus DefaultTemplater, so the
+// wrapper's full-lifecycle shape must keep DefaultTemplate too.
+type templaterFake struct {
+	*Fake
+	template string
+}
+
+func (p *templaterFake) DefaultTemplate() string { return p.template }
+
+// The decorated provider must expose DefaultTemplater exactly when the
+// inner provider implements it: the factory asks the provider it
+// wrapped for the default template during create recovery, so losing
+// DefaultTemplate would compare recovery against the wrong template.
+func TestTracedProviderPreservesDefaultTemplater(t *testing.T) {
+	telemetryFile(t)
+
+	wrapped := WrapProvider(&templaterProvider{template: "tmpl-default"})
+	templater, ok := wrapped.(DefaultTemplater)
+	if !ok {
+		t.Fatal("wrapped provider lost DefaultTemplater")
+	}
+	if got := templater.DefaultTemplate(); got != "tmpl-default" {
+		t.Fatalf("DefaultTemplate = %q, want the delegated %q", got, "tmpl-default")
+	}
+
+	full := WrapProvider(&templaterFake{Fake: NewFake(), template: "fake-default"})
+	templater, ok = full.(DefaultTemplater)
+	if !ok {
+		t.Fatal("wrapped full provider lost DefaultTemplater")
+	}
+	if got := templater.DefaultTemplate(); got != "fake-default" {
+		t.Fatalf("DefaultTemplate = %q, want the delegated %q", got, "fake-default")
 	}
 }
 
@@ -367,5 +418,261 @@ func TestTracedSandboxPreservesNetworkUpdater(t *testing.T) {
 	}
 	if _, ok := msb.(NetworkUpdater); ok {
 		t.Error("wrapped minimal sandbox gained NetworkUpdater")
+	}
+}
+
+// The wrapper's shape switch is hand-enumerated — one anonymous struct
+// per interface combination — so the mixin providers below let one
+// table pin every combination: the decorated provider must expose
+// exactly the optional interfaces its inner provider implements, for
+// all five of them (Suspender, Previewer, Stater, Closer,
+// DefaultTemplater).
+
+type suspMixin struct{}
+
+func (suspMixin) Suspend(context.Context, string) error { return nil }
+func (suspMixin) Resume(context.Context, string) error  { return nil }
+
+type prevMixin struct{}
+
+func (prevMixin) PreviewURL(context.Context, string, int) (string, error) { return "", nil }
+
+type statMixin struct{}
+
+func (statMixin) SandboxState(context.Context, string) (string, error) { return "", nil }
+
+type closMixin struct{}
+
+func (closMixin) Close() error { return nil }
+
+type tempMixin struct{}
+
+func (tempMixin) DefaultTemplate() string { return "probe-default" }
+
+type combo00 struct{ minimalProvider }
+type combo01 struct {
+	minimalProvider
+	suspMixin
+}
+type combo02 struct {
+	minimalProvider
+	prevMixin
+}
+type combo03 struct {
+	minimalProvider
+	suspMixin
+	prevMixin
+}
+type combo04 struct {
+	minimalProvider
+	statMixin
+}
+type combo05 struct {
+	minimalProvider
+	suspMixin
+	statMixin
+}
+type combo06 struct {
+	minimalProvider
+	prevMixin
+	statMixin
+}
+type combo07 struct {
+	minimalProvider
+	suspMixin
+	prevMixin
+	statMixin
+}
+type combo08 struct {
+	minimalProvider
+	closMixin
+}
+type combo09 struct {
+	minimalProvider
+	suspMixin
+	closMixin
+}
+type combo10 struct {
+	minimalProvider
+	prevMixin
+	closMixin
+}
+type combo11 struct {
+	minimalProvider
+	suspMixin
+	prevMixin
+	closMixin
+}
+type combo12 struct {
+	minimalProvider
+	statMixin
+	closMixin
+}
+type combo13 struct {
+	minimalProvider
+	suspMixin
+	statMixin
+	closMixin
+}
+type combo14 struct {
+	minimalProvider
+	prevMixin
+	statMixin
+	closMixin
+}
+type combo15 struct {
+	minimalProvider
+	suspMixin
+	prevMixin
+	statMixin
+	closMixin
+}
+type combo16 struct {
+	minimalProvider
+	tempMixin
+}
+type combo17 struct {
+	minimalProvider
+	suspMixin
+	tempMixin
+}
+type combo18 struct {
+	minimalProvider
+	prevMixin
+	tempMixin
+}
+type combo19 struct {
+	minimalProvider
+	suspMixin
+	prevMixin
+	tempMixin
+}
+type combo20 struct {
+	minimalProvider
+	statMixin
+	tempMixin
+}
+type combo21 struct {
+	minimalProvider
+	suspMixin
+	statMixin
+	tempMixin
+}
+type combo22 struct {
+	minimalProvider
+	prevMixin
+	statMixin
+	tempMixin
+}
+type combo23 struct {
+	minimalProvider
+	suspMixin
+	prevMixin
+	statMixin
+	tempMixin
+}
+type combo24 struct {
+	minimalProvider
+	closMixin
+	tempMixin
+}
+type combo25 struct {
+	minimalProvider
+	suspMixin
+	closMixin
+	tempMixin
+}
+type combo26 struct {
+	minimalProvider
+	prevMixin
+	closMixin
+	tempMixin
+}
+type combo27 struct {
+	minimalProvider
+	suspMixin
+	prevMixin
+	closMixin
+	tempMixin
+}
+type combo28 struct {
+	minimalProvider
+	statMixin
+	closMixin
+	tempMixin
+}
+type combo29 struct {
+	minimalProvider
+	suspMixin
+	statMixin
+	closMixin
+	tempMixin
+}
+type combo30 struct {
+	minimalProvider
+	prevMixin
+	statMixin
+	closMixin
+	tempMixin
+}
+type combo31 struct {
+	minimalProvider
+	suspMixin
+	prevMixin
+	statMixin
+	closMixin
+	tempMixin
+}
+
+func TestTracedProviderShapeMatrix(t *testing.T) {
+	telemetryFile(t)
+	cases := []struct {
+		inner Provider
+		want  [5]bool // Suspender, Previewer, Stater, Closer, DefaultTemplater
+	}{
+		{inner: combo00{minimalProvider{}}, want: [5]bool{false, false, false, false, false}},
+		{inner: combo01{minimalProvider{}, suspMixin{}}, want: [5]bool{true, false, false, false, false}},
+		{inner: combo02{minimalProvider{}, prevMixin{}}, want: [5]bool{false, true, false, false, false}},
+		{inner: combo03{minimalProvider{}, suspMixin{}, prevMixin{}}, want: [5]bool{true, true, false, false, false}},
+		{inner: combo04{minimalProvider{}, statMixin{}}, want: [5]bool{false, false, true, false, false}},
+		{inner: combo05{minimalProvider{}, suspMixin{}, statMixin{}}, want: [5]bool{true, false, true, false, false}},
+		{inner: combo06{minimalProvider{}, prevMixin{}, statMixin{}}, want: [5]bool{false, true, true, false, false}},
+		{inner: combo07{minimalProvider{}, suspMixin{}, prevMixin{}, statMixin{}}, want: [5]bool{true, true, true, false, false}},
+		{inner: combo08{minimalProvider{}, closMixin{}}, want: [5]bool{false, false, false, true, false}},
+		{inner: combo09{minimalProvider{}, suspMixin{}, closMixin{}}, want: [5]bool{true, false, false, true, false}},
+		{inner: combo10{minimalProvider{}, prevMixin{}, closMixin{}}, want: [5]bool{false, true, false, true, false}},
+		{inner: combo11{minimalProvider{}, suspMixin{}, prevMixin{}, closMixin{}}, want: [5]bool{true, true, false, true, false}},
+		{inner: combo12{minimalProvider{}, statMixin{}, closMixin{}}, want: [5]bool{false, false, true, true, false}},
+		{inner: combo13{minimalProvider{}, suspMixin{}, statMixin{}, closMixin{}}, want: [5]bool{true, false, true, true, false}},
+		{inner: combo14{minimalProvider{}, prevMixin{}, statMixin{}, closMixin{}}, want: [5]bool{false, true, true, true, false}},
+		{inner: combo15{minimalProvider{}, suspMixin{}, prevMixin{}, statMixin{}, closMixin{}}, want: [5]bool{true, true, true, true, false}},
+		{inner: combo16{minimalProvider{}, tempMixin{}}, want: [5]bool{false, false, false, false, true}},
+		{inner: combo17{minimalProvider{}, suspMixin{}, tempMixin{}}, want: [5]bool{true, false, false, false, true}},
+		{inner: combo18{minimalProvider{}, prevMixin{}, tempMixin{}}, want: [5]bool{false, true, false, false, true}},
+		{inner: combo19{minimalProvider{}, suspMixin{}, prevMixin{}, tempMixin{}}, want: [5]bool{true, true, false, false, true}},
+		{inner: combo20{minimalProvider{}, statMixin{}, tempMixin{}}, want: [5]bool{false, false, true, false, true}},
+		{inner: combo21{minimalProvider{}, suspMixin{}, statMixin{}, tempMixin{}}, want: [5]bool{true, false, true, false, true}},
+		{inner: combo22{minimalProvider{}, prevMixin{}, statMixin{}, tempMixin{}}, want: [5]bool{false, true, true, false, true}},
+		{inner: combo23{minimalProvider{}, suspMixin{}, prevMixin{}, statMixin{}, tempMixin{}}, want: [5]bool{true, true, true, false, true}},
+		{inner: combo24{minimalProvider{}, closMixin{}, tempMixin{}}, want: [5]bool{false, false, false, true, true}},
+		{inner: combo25{minimalProvider{}, suspMixin{}, closMixin{}, tempMixin{}}, want: [5]bool{true, false, false, true, true}},
+		{inner: combo26{minimalProvider{}, prevMixin{}, closMixin{}, tempMixin{}}, want: [5]bool{false, true, false, true, true}},
+		{inner: combo27{minimalProvider{}, suspMixin{}, prevMixin{}, closMixin{}, tempMixin{}}, want: [5]bool{true, true, false, true, true}},
+		{inner: combo28{minimalProvider{}, statMixin{}, closMixin{}, tempMixin{}}, want: [5]bool{false, false, true, true, true}},
+		{inner: combo29{minimalProvider{}, suspMixin{}, statMixin{}, closMixin{}, tempMixin{}}, want: [5]bool{true, false, true, true, true}},
+		{inner: combo30{minimalProvider{}, prevMixin{}, statMixin{}, closMixin{}, tempMixin{}}, want: [5]bool{false, true, true, true, true}},
+		{inner: combo31{minimalProvider{}, suspMixin{}, prevMixin{}, statMixin{}, closMixin{}, tempMixin{}}, want: [5]bool{true, true, true, true, true}},
+	}
+	for i, tc := range cases {
+		wrapped := WrapProvider(tc.inner)
+		got := [5]bool{}
+		_, got[0] = wrapped.(Suspender)
+		_, got[1] = wrapped.(Previewer)
+		_, got[2] = wrapped.(Stater)
+		_, got[3] = wrapped.(Closer)
+		_, got[4] = wrapped.(DefaultTemplater)
+		if got != tc.want {
+			t.Errorf("case %d: wrapped exposes %v, want %v", i, got, tc.want)
+		}
 	}
 }

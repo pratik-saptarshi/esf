@@ -19,8 +19,8 @@ import (
 // (Suspender, Previewer, Stater) that inner implements — no more —
 // because the factory detects optional support by type assertion and
 // must keep recording SKIPPED for providers without them. The same
-// holds for the decorated sandbox and NetworkUpdater, and Close for
-// providers that support it.
+// holds for the decorated sandbox and NetworkUpdater, and Close and
+// DefaultTemplate for providers that support them.
 func WrapProvider(inner Provider) Provider {
 	tel := telemetryFromEnv()
 	if tel == nil {
@@ -37,8 +37,19 @@ func wrapTracedProvider(inner Provider, tel *telemetry) Provider {
 	_, previewer := inner.(Previewer)
 	_, stater := inner.(Stater)
 	_, hasCloser := inner.(Closer)
+	_, hasTemplater := inner.(DefaultTemplater)
 	switch {
 	case suspender && previewer && stater:
+		if hasCloser && hasTemplater {
+			return struct {
+				Provider
+				Suspender
+				Previewer
+				Stater
+				Closer
+				DefaultTemplater
+			}{tp, tp, tp, tp, tp, tp}
+		}
 		if hasCloser {
 			return struct {
 				Provider
@@ -48,6 +59,15 @@ func wrapTracedProvider(inner Provider, tel *telemetry) Provider {
 				Closer
 			}{tp, tp, tp, tp, tp}
 		}
+		if hasTemplater {
+			return struct {
+				Provider
+				Suspender
+				Previewer
+				Stater
+				DefaultTemplater
+			}{tp, tp, tp, tp, tp}
+		}
 		return struct {
 			Provider
 			Suspender
@@ -55,12 +75,29 @@ func wrapTracedProvider(inner Provider, tel *telemetry) Provider {
 			Stater
 		}{tp, tp, tp, tp}
 	case suspender && previewer:
+		if hasCloser && hasTemplater {
+			return struct {
+				Provider
+				Suspender
+				Previewer
+				Closer
+				DefaultTemplater
+			}{tp, tp, tp, tp, tp}
+		}
 		if hasCloser {
 			return struct {
 				Provider
 				Suspender
 				Previewer
 				Closer
+			}{tp, tp, tp, tp}
+		}
+		if hasTemplater {
+			return struct {
+				Provider
+				Suspender
+				Previewer
+				DefaultTemplater
 			}{tp, tp, tp, tp}
 		}
 		return struct {
@@ -69,12 +106,29 @@ func wrapTracedProvider(inner Provider, tel *telemetry) Provider {
 			Previewer
 		}{tp, tp, tp}
 	case suspender && stater:
+		if hasCloser && hasTemplater {
+			return struct {
+				Provider
+				Suspender
+				Stater
+				Closer
+				DefaultTemplater
+			}{tp, tp, tp, tp, tp}
+		}
 		if hasCloser {
 			return struct {
 				Provider
 				Suspender
 				Stater
 				Closer
+			}{tp, tp, tp, tp}
+		}
+		if hasTemplater {
+			return struct {
+				Provider
+				Suspender
+				Stater
+				DefaultTemplater
 			}{tp, tp, tp, tp}
 		}
 		return struct {
@@ -83,6 +137,15 @@ func wrapTracedProvider(inner Provider, tel *telemetry) Provider {
 			Stater
 		}{tp, tp, tp}
 	case previewer && stater:
+		if hasCloser && hasTemplater {
+			return struct {
+				Provider
+				Previewer
+				Stater
+				Closer
+				DefaultTemplater
+			}{tp, tp, tp, tp, tp}
+		}
 		if hasCloser {
 			return struct {
 				Provider
@@ -91,12 +154,28 @@ func wrapTracedProvider(inner Provider, tel *telemetry) Provider {
 				Closer
 			}{tp, tp, tp, tp}
 		}
+		if hasTemplater {
+			return struct {
+				Provider
+				Previewer
+				Stater
+				DefaultTemplater
+			}{tp, tp, tp, tp}
+		}
 		return struct {
 			Provider
 			Previewer
 			Stater
 		}{tp, tp, tp}
 	case suspender:
+		if hasCloser && hasTemplater {
+			return struct {
+				Provider
+				Suspender
+				Closer
+				DefaultTemplater
+			}{tp, tp, tp, tp}
+		}
 		if hasCloser {
 			return struct {
 				Provider
@@ -104,11 +183,26 @@ func wrapTracedProvider(inner Provider, tel *telemetry) Provider {
 				Closer
 			}{tp, tp, tp}
 		}
+		if hasTemplater {
+			return struct {
+				Provider
+				Suspender
+				DefaultTemplater
+			}{tp, tp, tp}
+		}
 		return struct {
 			Provider
 			Suspender
 		}{tp, tp}
 	case previewer:
+		if hasCloser && hasTemplater {
+			return struct {
+				Provider
+				Previewer
+				Closer
+				DefaultTemplater
+			}{tp, tp, tp, tp}
+		}
 		if hasCloser {
 			return struct {
 				Provider
@@ -116,11 +210,26 @@ func wrapTracedProvider(inner Provider, tel *telemetry) Provider {
 				Closer
 			}{tp, tp, tp}
 		}
+		if hasTemplater {
+			return struct {
+				Provider
+				Previewer
+				DefaultTemplater
+			}{tp, tp, tp}
+		}
 		return struct {
 			Provider
 			Previewer
 		}{tp, tp}
 	case stater:
+		if hasCloser && hasTemplater {
+			return struct {
+				Provider
+				Stater
+				Closer
+				DefaultTemplater
+			}{tp, tp, tp, tp}
+		}
 		if hasCloser {
 			return struct {
 				Provider
@@ -128,15 +237,35 @@ func wrapTracedProvider(inner Provider, tel *telemetry) Provider {
 				Closer
 			}{tp, tp, tp}
 		}
+		if hasTemplater {
+			return struct {
+				Provider
+				Stater
+				DefaultTemplater
+			}{tp, tp, tp}
+		}
 		return struct {
 			Provider
 			Stater
 		}{tp, tp}
 	default:
+		if hasCloser && hasTemplater {
+			return struct {
+				Provider
+				Closer
+				DefaultTemplater
+			}{tp, tp, tp}
+		}
 		if hasCloser {
 			return struct {
 				Provider
 				Closer
+			}{tp, tp}
+		}
+		if hasTemplater {
+			return struct {
+				Provider
+				DefaultTemplater
 			}{tp, tp}
 		}
 		// Even the base case goes through an anonymous struct:
@@ -237,6 +366,19 @@ func (p *tracedProvider) Close() error {
 		return nil
 	}
 	return closer.Close()
+}
+
+// DefaultTemplate implements DefaultTemplater by delegation, with no
+// span: it is a plain accessor the factory consults during create
+// recovery, and it must reach the inner provider whenever it supports
+// a default so recovery compares against the template Create will
+// actually use. Providers without a default report "".
+func (p *tracedProvider) DefaultTemplate() string {
+	templater, ok := p.inner.(DefaultTemplater)
+	if !ok {
+		return ""
+	}
+	return templater.DefaultTemplate()
 }
 
 // Suspend implements Suspender by delegation, with a span.
