@@ -702,17 +702,26 @@ func newDoctorCommand(configPath *string) *cobra.Command {
 			}
 			fmt.Println()
 
-			fmt.Println("CubeSandbox:")
+			fmt.Println("Sandbox provider:")
 			if offline {
 				fmt.Println("  [skip] connectivity check disabled (--offline)")
+				fmt.Printf("  [ok]   mode %s\n", cfg.SandboxProviderMode())
 			} else if runtime, err := factory.NewRuntime(ctx, factory.RuntimeOptions{Config: cfg}); err == nil {
 				defer runtime.Close(ctx)
+				fmt.Printf("  [ok]   mode %s, selected %s\n", runtime.Recon.Mode, runtime.Recon.Selected)
+				for _, probe := range runtime.Recon.Probes {
+					fmt.Printf("         - %s: %s\n", probe.Provider, probeSummaryText(probe))
+				}
 				if err := runtime.Provider.Ping(ctx); err != nil {
 					fmt.Printf("  [FAIL] %v\n", err)
 					problems++
 				} else {
+					template := cfg.Cube.TemplateID
+					if runtime.Provider.Name() == "podman" {
+						template = cfg.Podman.Image
+					}
 					fmt.Printf("  [ok]   provider %s reachable, template %s exists\n",
-						runtime.Provider.Name(), cfg.Cube.TemplateID)
+						runtime.Provider.Name(), template)
 					if infos, err := runtime.Provider.List(ctx); err == nil {
 						fmt.Printf("  [ok]   %d live sandbox(es)\n", len(infos))
 						for _, info := range infos {
@@ -777,6 +786,22 @@ func newDoctorCommand(configPath *string) *cobra.Command {
 	command.Flags().StringVar(&profile, "profile", "", "diagnostic profile (production)")
 	command.Flags().StringVar(&output, "output", "", "output format (json)")
 	return command
+}
+
+// probeSummaryText renders one recon probe for the text doctor:
+// "configured, reachable", "configured — <detail>", etc.
+func probeSummaryText(probe factory.ProviderProbe) string {
+	text := "not configured"
+	if probe.Configured {
+		text = "configured"
+	}
+	if probe.Reachable {
+		text += ", reachable"
+	}
+	if probe.Detail != "" {
+		text += " — " + probe.Detail
+	}
+	return text
 }
 
 // ── sandboxes ───────────────────────────────────────────────────────────────

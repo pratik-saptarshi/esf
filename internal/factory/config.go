@@ -1,6 +1,7 @@
 package factory
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"github.com/mitkox/esf/internal/agentharness"
 	artifacts "github.com/mitkox/esf/internal/factoryartifacts"
 	"github.com/mitkox/esf/internal/sandbox/cube"
+	"github.com/mitkox/esf/internal/sandbox/podman"
 	"github.com/mitkox/esf/internal/tomlx"
 	"github.com/mitkox/esf/internal/verification"
 )
@@ -37,6 +39,7 @@ type Config struct {
 	FactoryVersion string `toml:"factory_version"`
 
 	Cube     cube.Config    `toml:"cube"`
+	Podman   podman.Config  `toml:"podman"`
 	Temporal TemporalConfig `toml:"temporal"`
 	Storage  StorageConfig  `toml:"storage"`
 	Limits   LimitsConfig   `toml:"limits"`
@@ -82,6 +85,11 @@ type Config struct {
 
 // SandboxConfig controls factory-owned sandbox preparation.
 type SandboxConfig struct {
+	// Provider selects the sandbox backend: "cubesandbox" (the default
+	// when empty, including for configs written before provider selection
+	// existed), "podman", or "auto".
+	Provider string `toml:"provider"`
+
 	// BasePackages are installed in EVERY sandbox before the agent harness is
 	// provisioned.
 	//
@@ -247,6 +255,7 @@ func Default() Config {
 		FactoryVersion: Version,
 		SchemaVersion:  ConfigSchemaVersion,
 		Cube:           cube.ConfigFromEnv(),
+		Podman:         podman.ConfigFromEnv(),
 		Temporal: TemporalConfig{
 			HostPort:       "127.0.0.1:7233",
 			Namespace:      "default",
@@ -364,13 +373,74 @@ func applyEnvOverrides(cfg *Config) {
 	if cfg.Cube.APIURL == "" {
 		cfg.Cube = cube.ConfigFromEnv()
 	}
+	// Podman settings come from the environment unless the file set them.
+	if cfg.Podman.Image == "" {
+		cfg.Podman = podman.ConfigFromEnv()
+	}
+}
+
+// SandboxProviderMode returns the normalized sandbox provider
+// selection: "cubesandbox" (the default, including for configs written
+// before provider selection existed), "podman", or "auto". Unknown
+// values normalize to "cubesandbox" here and are rejected by Validate.
+func (c Config) SandboxProviderMode() string {
+	switch strings.ToLower(strings.TrimSpace(c.Sandbox.Provider)) {
+	case "podman":
+		return "podman"
+	case "auto":
+		return "auto"
+	default:
+		return "cubesandbox"
+	}
+}
+
+// cubeConfigured reports whether the [cube] section names a backend
+// (reachability is a separate, runtime question).
+func (c Config) cubeConfigured() bool {
+	return strings.TrimSpace(c.Cube.APIURL) != "" && strings.TrimSpace(c.Cube.TemplateID) != ""
+}
+
+// podmanConfigured reports whether the [podman] section names a
+// template image.
+func (c Config) podmanConfigured() bool {
+	return strings.TrimSpace(c.Podman.Image) != ""
 }
 
 // Validate checks the configuration at startup so a missing setting fails
 // immediately rather than in the middle of a run.
 func (c Config) Validate() error {
-	if err := c.Cube.Validate(); err != nil {
-		return err
+	// Provider selection decides which backend section is
+	// authoritative. The default branch preserves the pre-feature
+	// behavior byte-for-byte: cube validation first, its error returned
+	// unwrapped.
+	switch raw := strings.ToLower(strings.TrimSpace(c.Sandbox.Provider)); raw {
+	case "", "cubesandbox":
+		if err := c.Cube.Validate(); err != nil {
+			return err
+		}
+	case "podman":
+		if err := c.Podman.Validate(); err != nil {
+			return err
+		}
+	case "auto":
+		if !c.cubeConfigured() && !c.podmanConfigured() {
+			return errors.New("sandbox.provider = \"auto\" requires at least one configured backend: set [cube] api_url and template_id, or [podman] image")
+		}
+		// A configured-but-invalid backend is an operator error, not a
+		// probe outcome: fail closed here rather than letting auto mode
+		// silently route around a typo.
+		if c.cubeConfigured() {
+			if err := c.Cube.Validate(); err != nil {
+				return fmt.Errorf("sandbox.provider = \"auto\" with [cube] configured: %w", err)
+			}
+		}
+		if c.podmanConfigured() {
+			if err := c.Podman.Validate(); err != nil {
+				return fmt.Errorf("sandbox.provider = \"auto\" with [podman] configured: %w", err)
+			}
+		}
+	default:
+		return fmt.Errorf("sandbox.provider %q is not supported (use \"cubesandbox\", \"podman\", or \"auto\")", c.Sandbox.Provider)
 	}
 	var problems []string
 	if c.SchemaVersion != 0 && c.SchemaVersion != ConfigSchemaVersion {

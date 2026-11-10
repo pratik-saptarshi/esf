@@ -208,6 +208,10 @@ func (p *Provider) Close() error { return p.client.Close() }
 // Config returns a copy of the provider configuration.
 func (p *Provider) Config() Config { return p.cfg }
 
+// DefaultTemplate returns the configured cube template, which Create uses
+// when a spec does not name one.
+func (p *Provider) DefaultTemplate() string { return p.cfg.TemplateID }
+
 // Ping verifies the Cube API is reachable and the configured template exists.
 func (p *Provider) Ping(ctx context.Context) error {
 	if _, err := p.client.Health(ctx); err != nil {
