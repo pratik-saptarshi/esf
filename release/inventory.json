@@ -24,13 +24,13 @@
     },
     "opencode": {
       "package": "@opencode/cli",
-      "version": "2.0.29",
-      "npm_integrity": "sha512-1ZmbylUtiRvtN8YMLxBEN4u0tqhfKI0AQBPvgdCLYLbB8BS80e6cFnOhzHH6L663o4RVL5bMa/VleLh1hNX+NA==",
-      "linux_amd64_binary_sha256": "ff17011078cfe1d2db04f429c65a5bf9dd86e232cc493c7a03730ecc12a000ff",
+      "version": "2.2.6",
+      "npm_integrity": "sha512-QTa4MBGUSTlE41juBAMRZxyjZZWXm/qKul1ZJMYKxrrdCyq5Asn3IiyXUXDQDK97A4BZ5LQuyHz86KFp85AzkQ==",
+      "linux_amd64_binary_sha256": "50503d24577fa4117a7c95ee85b2cd679606a87eacf20ca54ed5db5c9e1cf895",
       "license": "MIT",
       "qualification": "portable Linux binary digest and CLI startup checked in Cube; model-backed and production qualification pending",
       "linux_amd64_package": "@opencode/cli-linux-x64-baseline",
-      "linux_amd64_npm_integrity": "sha512-YvDKgdRVZzBoedL22zNQyOrI38n9bElwdCNqYiZ1CLfE7CS6Ni4TulGi3RZgZe+KwJfhoiEjwNuZ0E55raFqGA=="
+      "linux_amd64_npm_integrity": "sha512-GA7bnrvfJHOHXWsoiGLzzt2SKcL2oMD5LhHIyfQUP14L2XXpxzG/S8QoEMor1m/q9961f9nv4dTqYr9vuMOSjA=="
     },
     "unreal": {
       "release": "0.3.1",
@@ -95,7 +95,7 @@
     "postgresql": null
   },
   "templates": {
-    "recipe_sha256": "5110b291edc9cc261366ce429b343bb6898ae02ffe23df6dad9d1cfe43ce39a1",
+    "recipe_sha256": "0e96365962cd81657a4bced2189018d87f73b044e122460097aab73da02f1938",
     "architecture": "linux/amd64",
     "git_package": null,
     "ca_certificates_package": null,

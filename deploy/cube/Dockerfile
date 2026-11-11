@@ -8,7 +8,7 @@ ARG TARGETARCH
 WORKDIR /src/agents/opencode
 COPY agents/opencode/package.json agents/opencode/package-lock.json ./
 RUN test "$TARGETARCH" = amd64 && npm ci --ignore-scripts && \
-    echo 'ff17011078cfe1d2db04f429c65a5bf9dd86e232cc493c7a03730ecc12a000ff  node_modules/@opencode/cli-linux-x64-baseline/bin/opencode' | sha256sum -c -
+    echo '50503d24577fa4117a7c95ee85b2cd679606a87eacf20ca54ed5db5c9e1cf895  node_modules/@opencode/cli-linux-x64-baseline/bin/opencode' | sha256sum -c -
 
 FROM ${DEBIAN_BASE} AS unreal
 ARG TARGETARCH
@@ -26,7 +26,7 @@ RUN test "$TARGETARCH" = amd64 && apt-get update && apt-get install -y --no-inst
 COPY --from=opencode /src/agents/opencode/node_modules/@opencode/cli-linux-x64-baseline/bin/opencode /opt/esf/agents/opencode2
 COPY --from=unreal /tmp/unreal-agent-runner /opt/esf/agents/unreal-agent-runner
 RUN chmod 0755 /opt/esf/agents/opencode2 /opt/esf/agents/unreal-agent-runner && \
-    echo 'ff17011078cfe1d2db04f429c65a5bf9dd86e232cc493c7a03730ecc12a000ff  /opt/esf/agents/opencode2' | sha256sum -c - && \
+    echo '50503d24577fa4117a7c95ee85b2cd679606a87eacf20ca54ed5db5c9e1cf895  /opt/esf/agents/opencode2' | sha256sum -c - && \
     echo 'd289aa2046bb79d2b063679c6e0e6b714c759f8a5ed6f969d3b3ea1eeeec03ee  /opt/esf/agents/unreal-agent-runner' | sha256sum -c -
 ENV PATH=/opt/esf/agents:${PATH}
 WORKDIR /workspace
