@@ -252,13 +252,43 @@ def restore_companions(root):
         git(root, "checkout", "--", rel, check=False)
 
 
+def opencode_binary_pin_stale(before, after):
+    """True if derivation changed the OpenCode release identity
+    (version or binary-package integrity). The recorded
+    linux_amd64_binary_sha256 belongs to the previous release in that
+    case and cannot be re-derived from the manifests — the frozen
+    inventory check cannot see it either, because it only compares
+    the digest against the equally stale copies in example.toml and
+    the Cube template. Such updates are refused for manual
+    regeneration."""
+    old = before.get("dependencies", {}).get("opencode", {})
+    new = after.get("dependencies", {}).get("opencode", {})
+    return (
+        old.get("version") != new.get("version")
+        or old.get("linux_amd64_npm_integrity")
+        != new.get("linux_amd64_npm_integrity")
+    )
+
+
 def process_local(root, cap):
     """Run the companion on one checkout. Returns (status, detail)."""
     root = Path(root)
     if head_is_companion(root):
         return "skipped", "head is already a companion commit"
+    before = json.loads((root / "release/inventory.json").read_text())
     sync_lockfiles(root)
     sync_inventory(root)
+    after = json.loads((root / "release/inventory.json").read_text())
+    if opencode_binary_pin_stale(before, after):
+        restore_companions(root)
+        return (
+            "refused",
+            "OpenCode bump changes the binary identity "
+            f"({before['dependencies']['opencode'].get('version')} -> "
+            f"{after['dependencies']['opencode'].get('version')}); "
+            "linux_amd64_binary_sha256 cannot be re-derived — "
+            "manual regeneration required",
+        )
     verify = subprocess.run(
         [sys.executable, str(root / "scripts/verify-release-inventory.py")],
         capture_output=True,
@@ -335,7 +365,10 @@ def sweep(cap):
                 check=True,
             )
             try:
-                status, detail = process_local(worktree, cap)
+                try:
+                    status, detail = process_local(worktree, cap)
+                except Exception as exc:  # one bad branch must not starve the sweep
+                    status, detail = "error", f"{type(exc).__name__}: {exc}"
                 if status == "committed":
                     push = git(
                         worktree,
@@ -370,7 +403,7 @@ def sweep(cap):
                     capture_output=True,
                 )
             print(f"PR #{pr['number']} ({branch}): {status} — {detail}")
-            if status in ("refused", "verify-failed", "push-failed"):
+            if status in ("refused", "verify-failed", "push-failed", "error"):
                 failures += 1
     return 1 if failures else 0
 

@@ -11,6 +11,7 @@ from dependabot_companion import (
     COMPANION_FILES,
     decide_diff,
     derive_inventory,
+    opencode_binary_pin_stale,
     parse_go_mod,
     serialize_inventory,
 )
@@ -56,6 +57,38 @@ class DecideDiffTests(unittest.TestCase):
                 "internal/controlplane/web/package-lock.json",
                 "agents/opencode/package-lock.json",
             },
+        )
+
+
+class OpenCodePinStaleTests(unittest.TestCase):
+    def _inventory(self, version, integrity):
+        return {
+            "dependencies": {
+                "opencode": {
+                    "version": version,
+                    "linux_amd64_npm_integrity": integrity,
+                }
+            }
+        }
+
+    def test_unchanged_identity_is_not_stale(self):
+        inv = self._inventory("2.0.29", "sha512-bin")
+        self.assertFalse(opencode_binary_pin_stale(inv, inv))
+
+    def test_version_change_is_stale(self):
+        self.assertTrue(
+            opencode_binary_pin_stale(
+                self._inventory("2.0.29", "sha512-bin"),
+                self._inventory("2.0.30", "sha512-bin"),
+            )
+        )
+
+    def test_binary_integrity_change_is_stale(self):
+        self.assertTrue(
+            opencode_binary_pin_stale(
+                self._inventory("2.0.29", "sha512-old"),
+                self._inventory("2.0.29", "sha512-new"),
+            )
         )
 
 
