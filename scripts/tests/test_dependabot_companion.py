@@ -14,6 +14,7 @@ from dependabot_companion import (
     opencode_binary_pin_stale,
     parse_go_mod,
     serialize_inventory,
+    staged_files,
 )
 
 
@@ -90,6 +91,37 @@ class OpenCodePinStaleTests(unittest.TestCase):
                 self._inventory("2.0.29", "sha512-new"),
             )
         )
+
+
+class StagedFilesTests(unittest.TestCase):
+    def test_detects_staged_and_ignores_unstaged(self):
+        import subprocess
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            (root / "go.mod").write_text("module example.com/x\n")
+            subprocess.run(["git", "-C", str(root), "add", "go.mod"], check=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(root),
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.invalid",
+                    "commit",
+                    "-qm",
+                    "fixture",
+                ],
+                check=True,
+            )
+            (root / "go.mod").write_text("module example.com/x\n\ngo 1.27.3\n")
+            # Unstaged edit: not reported.
+            self.assertEqual(staged_files(root), set())
+            subprocess.run(["git", "-C", str(root), "add", "go.mod"], check=True)
+            self.assertEqual(staged_files(root), {"go.mod"})
 
 
 class DeriveInventoryTests(unittest.TestCase):
