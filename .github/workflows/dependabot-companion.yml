@@ -1,0 +1,47 @@
+name: Dependabot companion
+
+# Regenerates the companion files a Dependabot bump leaves stale
+# (release inventory + embedded copy, npm lockfiles) and commits them
+# back to the bot branch, labelled `companions-regenerated` for human
+# review. See scripts/dependabot_companion.py for the safety envelope:
+# companion files only, diff cap, inventory check must pass, at most
+# one companion commit per bot push.
+#
+# This runs on a schedule / dispatch from the default branch because
+# workflows triggered by Dependabot itself receive a read-only token
+# and cannot push. It never runs on pull_request.
+on:
+  schedule:
+    # Weekday afternoons, after Dependabot's Monday-morning runs.
+    - cron: "30 12 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: dependabot-companion
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    name: Companion sweep
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26.12.0
+      - name: Ensure companion label exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create companions-regenerated \
+            --description "Dependabot companion regenerated inventory/lockfiles; needs human review" \
+            --color 0E8A16 --force
+      - name: Sweep open Dependabot PRs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/dependabot_companion.py --sweep
