@@ -15,6 +15,7 @@ from dependabot_companion import (
     parse_go_mod,
     serialize_inventory,
     staged_files,
+    unstaged_files,
 )
 
 
@@ -118,10 +119,12 @@ class StagedFilesTests(unittest.TestCase):
                 check=True,
             )
             (root / "go.mod").write_text("module example.com/x\n\ngo 1.27.3\n")
-            # Unstaged edit: not reported.
+            # Unstaged edit: not staged, but visible to unstaged_files.
             self.assertEqual(staged_files(root), set())
+            self.assertEqual(unstaged_files(root), {"go.mod"})
             subprocess.run(["git", "-C", str(root), "add", "go.mod"], check=True)
             self.assertEqual(staged_files(root), {"go.mod"})
+            self.assertEqual(unstaged_files(root), set())
 
 
 class DeriveInventoryTests(unittest.TestCase):

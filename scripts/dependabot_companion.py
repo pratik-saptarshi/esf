@@ -276,6 +276,12 @@ def staged_files(root):
     return {line for line in out.splitlines() if line}
 
 
+def unstaged_files(root):
+    """Paths with unstaged modifications to tracked files."""
+    out = git(root, "diff", "--name-only").stdout
+    return {line for line in out.splitlines() if line}
+
+
 def process_local(root, cap):
     """Run the companion on one checkout. Returns (status, detail)."""
     root = Path(root)
@@ -290,6 +296,18 @@ def process_local(root, cap):
             "refused",
             "checkout has staged changes ("
             + ", ".join(sorted(staged))
+            + "); refusing to run",
+        )
+    unstaged = unstaged_files(root)
+    if unstaged:
+        # Refusal paths below restore companion files with
+        # `git checkout --`, which would permanently discard these
+        # pre-existing edits. The companion's contract is a clean
+        # checkout (exactly what the sweep's worktrees provide).
+        return (
+            "refused",
+            "checkout has unstaged changes ("
+            + ", ".join(sorted(unstaged))
             + "); refusing to run",
         )
     before = json.loads((root / "release/inventory.json").read_text())
