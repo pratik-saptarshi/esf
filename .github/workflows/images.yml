@@ -25,8 +25,6 @@ jobs:
       matrix:
         include:
           - {component: factory, file: deploy/images/Dockerfile.runtime, target: factory, platforms: "linux/amd64,linux/arm64"}
-          - {component: console, file: deploy/images/Dockerfile.runtime, target: console, platforms: "linux/amd64,linux/arm64"}
-          - {component: managedworker, file: deploy/images/Dockerfile.managedworker, target: managedworker, platforms: "linux/amd64,linux/arm64"}
           - {component: intake, file: deploy/images/Dockerfile.intake, target: intake, platforms: "linux/amd64,linux/arm64"}
           - {component: cube-template, file: deploy/cube/Dockerfile, target: cube-template, platforms: "linux/amd64"}
     permissions:
@@ -55,7 +53,7 @@ jobs:
           python3 scripts/verify-release-inventory.py
       - name: Log in to GHCR
         if: inputs.publish
-        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
