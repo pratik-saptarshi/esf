@@ -25,9 +25,7 @@ def main() -> int:
     inventory = json.loads((ROOT / "release/inventory.json").read_text())
     embedded_inventory = ROOT / "internal/releaseinfo/inventory.json"
     dependencies = inventory["dependencies"]
-    harness2 = json.loads((ROOT / "third_party/harness2/UPSTREAM.json").read_text())
     mod = (ROOT / "go.mod").read_text()
-    npm_frontend = json.loads((ROOT / "internal/controlplane/web/package-lock.json").read_text())["packages"]
     npm_agent = json.loads((ROOT / "agents/opencode/package-lock.json").read_text())["packages"]
     python = tomllib.loads((ROOT / "uv.lock").read_text())
     example = tomllib.loads((ROOT / "internal/factory/example.toml").read_text())
@@ -39,10 +37,6 @@ def main() -> int:
             issues.append(message)
 
     require(embedded_inventory.exists() and embedded_inventory.read_bytes() == (ROOT / "release/inventory.json").read_bytes(), "embedded factory inventory differs from release inventory")
-    require(harness2["commit"] == "1cfe254e8d25b15f37048c3730134686abe60335" and
-            harness2["license"] == "Apache-2.0" and harness2["production_qualified"] is False,
-            "Harness2 provenance or qualification boundary changed")
-    require(dependencies.get("harness2") == harness2, "Harness2 release provenance differs")
     version = inventory["release"].removeprefix("v")
     root_python = tomllib.loads((ROOT / "pyproject.toml").read_text())
     require(root_python["project"]["version"] == version, "root Python version differs from inventory")
@@ -54,14 +48,14 @@ def main() -> int:
     require(re.search(rf'(?m)^version: {re.escape(version)}$', chart) is not None and
             re.search(rf'(?m)^appVersion: "{re.escape(version)}"$', chart) is not None,
             "Helm chart versions differ from inventory")
-    for dockerfile in ("runtime", "managedworker", "intake"):
+    for dockerfile in ("runtime", "intake"):
         require(f"ARG ESF_VERSION={version}" in (ROOT / f"deploy/images/Dockerfile.{dockerfile}").read_text(),
                 f"{dockerfile} image version differs from inventory")
 
     require(re.search(rf"(?m)^go {re.escape(inventory['toolchains']['go'])}$", mod) is not None, "Go toolchain does not match inventory")
     require(dependencies["cubesandbox"]["go_sdk"] in mod, "Cube SDK does not match inventory")
     require(example["cube"].get("version") == dependencies["cubesandbox"]["release"], "example Cube version differs from inventory")
-    for module, version in (("google.golang.org/grpc", "grpc"), ("go.opentelemetry.io/otel", "otel"), ("modernc.org/sqlite", "sqlite"), ("golang.org/x/net", "x_net")):
+    for module, version in (("google.golang.org/grpc", "grpc"), ("go.opentelemetry.io/otel", "otel"), ("golang.org/x/net", "x_net")):
         require(re.search(rf"(?m)^\s*{re.escape(module)} v{re.escape(dependencies[version])}(?:\s|$)", mod) is not None, f"{module} does not match inventory")
     for module, key in (("go.temporal.io/sdk", "go_sdk"), ("go.temporal.io/api", "api")):
         require(re.search(rf"(?m)^\s*{re.escape(module)} v{re.escape(dependencies['temporal'][key])}(?:\s|$)", mod) is not None,
@@ -77,7 +71,7 @@ def main() -> int:
     require(f"node-version: {inventory['toolchains']['node']}" in ci, "CI Node differs from inventory")
     require(f"@v{inventory['security_tools']['govulncheck']}" in ci, "CI vulnerability scanner differs from inventory")
     require(f"@v{inventory['security_tools']['gitleaks']}" in ci, "CI secret scanner differs from inventory")
-    for name, bases in (("runtime", ("go", "runtime")), ("managedworker", ("go", "worker")), ("intake", ("go", "python"))):
+    for name, bases in (("runtime", ("go", "runtime")), ("intake", ("go", "python", "alpine"))):
         source = (ROOT / f"deploy/images/Dockerfile.{name}").read_text()
         for base in bases:
             require(inventory["build_bases"][base] in source, f"{name} {base} base differs from inventory")
@@ -94,10 +88,6 @@ def main() -> int:
     require("${POSTGRESQL_DATA_VOLUME:?" in compose, "PostgreSQL volume must be selected explicitly before migration")
     if int(dependencies["postgresql"].split(".")[0]) >= 18:
         require("temporal-postgresql-data:/var/lib/postgresql\n" in compose, "PostgreSQL 18+ volume layout differs from recipe")
-    frontend = dependencies["frontend"]
-    for package, key in (("vite", "vite"), ("lucide-react", "lucide"), ("jsdom", "jsdom"), ("react", "react"), ("tailwindcss", "tailwind")):
-        actual = npm_frontend.get(f"node_modules/{package}", {}).get("version")
-        require(actual == frontend[key], f"{package}: lockfile {actual}, inventory {frontend[key]}")
     opencode = npm_agent.get("node_modules/@opencode/cli", {})
     require(opencode.get("version") == dependencies["opencode"]["version"], "OpenCode version differs from inventory")
     require(opencode.get("integrity") == dependencies["opencode"]["npm_integrity"], "OpenCode package integrity differs from inventory")
@@ -111,10 +101,16 @@ def main() -> int:
     require(example_agent.get("credential_mode") == "cube_egress" and not example_agent.get("pass_env") and not example_agent.get("provider_files"), "example OpenCode credentials are agent-readable")
     require(example_agent.get("packages") == [] and not example_agent.get("catalog_cache"), "example OpenCode installs packages or uploads a catalog on every run")
     require(example["sandbox"].get("base_packages") == [], "example installs sandbox packages on every run")
-    for base in ("node", "cube"):
+    for base in ("go", "node", "cube"):
         require(inventory["build_bases"][base] in template, f"Cube template {base} base differs from inventory")
-    for name, field in (("opencode", "linux_amd64_binary_sha256"), ("unreal", "binary_sha256"), ("unreal", "linux_amd64_archive_sha256")):
-        require(dependencies[name][field] in template, f"Cube template {name} {field} differs from inventory")
+    require(dependencies["opencode"]["linux_amd64_binary_sha256"] in template,
+            "Cube template opencode linux_amd64_binary_sha256 differs from inventory")
+    envd = dependencies["envd"]
+    for field in ("commit", "source_archive_sha256", "binary_sha256"):
+        require(envd[field] in template, f"Cube template envd {field} differs from inventory")
+    unreal_payload = dependencies["unreal"]["template_payload"]
+    for field in ("commit", "source_archive_sha256", "binary_sha256"):
+        require(unreal_payload[field] in template, f"Cube template unreal payload {field} differs from inventory")
     require(hashlib.sha256(template.encode()).hexdigest() == inventory["templates"]["recipe_sha256"], "Cube template recipe differs from inventory")
     dspy = next((package.get("version") for package in python["package"] if package["name"] == "dspy"), None)
     require(dspy == dependencies["dspy"], "DSPy lock differs from inventory")

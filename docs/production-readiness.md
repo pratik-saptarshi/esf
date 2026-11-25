@@ -4,6 +4,19 @@ Reviewed on 2026-09-19. This review improves the implementation; it does not
 certify a deployment. The bundled Temporal stack and host-specific Cube settings
 are development configuration.
 
+> **Update 2026-10-27:** ESF 0.6.2 removed the Machinist CLI, control plane and
+> web UI. Machinist and frontend items in this historical review describe the
+> pre-removal candidate and no longer apply. The factory validation below
+> remains the relevant record; see [the 0.6.2 release notes](release-v0.6.2.md).
+>
+> **Update 2026-11-05:** ESF 1.0.0-rc.1 is the current release candidate. This
+> historical review describes the validation it performed; it does not qualify
+> the release candidate, and production qualification is still outstanding.
+> The release candidate removes
+> the experimental Harness2 improvement PoC and lists the remaining GA gates in
+> [the 1.0.0-rc.1 release notes](release-v1.0.0-rc.1.md). Toolchain versions
+> quoted below are historical.
+
 ## Corrections made
 
 | Finding | Resulting behavior |

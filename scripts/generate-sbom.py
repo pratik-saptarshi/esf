@@ -49,7 +49,6 @@ def main():
     components = {}
     sources = (
         go_modules(),
-        npm_packages("internal/controlplane/web/package-lock.json"),
         npm_packages("agents/opencode/package-lock.json"),
         npm_packages("agents/pi/package-lock.json"),
         python_packages(),
@@ -65,12 +64,6 @@ def main():
             "version": pi["contract_version"] if name == "esf-pi-runner" else entry["version"],
             "hashes": [{"alg": "SHA-256", "content": entry["sha256"]}],
             "licenses": [{"license": {"id": "MIT"}}]}
-    harness2 = json.loads((ROOT / "third_party/harness2/UPSTREAM.json").read_text())
-    ref = "pkg:generic/google-research/harness2@" + harness2["commit"]
-    components[ref] = {"type": "framework", "bom-ref": ref, "name": "harness2-method",
-                       "version": harness2["commit"], "purl": ref,
-                       "licenses": [{"license": {"id": "Apache-2.0"}}],
-                       "externalReferences": [{"type": "vcs", "url": harness2["repository"]}]}
     ordered = [components[key] for key in sorted(components)]
     component_digest = hashlib.sha256(json.dumps(ordered, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     bom = {

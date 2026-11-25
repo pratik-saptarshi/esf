@@ -145,8 +145,14 @@ service_name  = "factory"
 
 [repositories]
 # Remote repositories must match one of these prefixes. Empty disallows all
-# remote repositories; local sources remain available for tests.
+# remote repositories. Local sources require a separate exact-path registration.
 allowed = []
+# Exact canonical absolute directories on the worker host; descendants and
+# symlink aliases are not granted. Empty disables --local-path submissions.
+# Keep these repositories, their parent directories and Git metadata under
+# operator control. Register the fixture path before running factory-run-demo.sh.
+local_paths = []
+# local_paths = ["/srv/esf/fixtures/factory-e2e"]
 
 # ── Agent harnesses ──────────────────────────────────────────────────────────
 # The harness name is what a request may select. The executable and arguments
@@ -159,7 +165,7 @@ preinstalled = true
 packages    = []
 pass_env    = []
 catalog_cache = ""
-binary_sha256 = "ff17011078cfe1d2db04f429c65a5bf9dd86e232cc493c7a03730ecc12a000ff"
+binary_sha256 = "8d060e1d2fbb9bb44cf09ae6ed1f3f6a7cff070b5227e2f90970132b23a92050"
 provider    = "openrouter"
 base_url    = "https://openrouter.ai/api/v1"
 model       = "openrouter/<model>"
@@ -328,9 +334,9 @@ description = "repository test script"
 # type = "pi"
 # preinstalled = true
 # binary = "/opt/esf/agents/pi-runner.mjs"
-# binary_sha256 = "04bd662ac31ca6e74775a6b0c03403d66030c44855a9840607e95ab2fcf89bf5"
+# binary_sha256 = "2f2b5191139a564050c98f0784e9be63893d47685abc6ac8a4049a942b201993"
 # runtime_binary = "/opt/esf/agents/node"
-# runtime_sha256 = "caa24debe02770c92a70677e2a62ca98890150e7ac1c17bcfe31bcc98cc89943"
+# runtime_sha256 = "0adde40d1b7dfa57c8bc83cbc319758c3ec6ebba21363bb2fa752ea6b267ad1b"
 # provider = "local"
 # base_url = "http://192.168.0.14:8000/v1"
 # model = "<approved-model-id>"

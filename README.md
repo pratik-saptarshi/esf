@@ -11,15 +11,14 @@ Temporal coordinates the workflow and sandbox cleanup.
 Task → Temporal → CubeSandbox → coding agent → verification → patch + evidence
 ```
 
-ESF is an independent fork of [Machinist](https://github.com/owainlewis/machinist)
-by Owain Lewis. It retains the Machinist CLI, local control plane, and web UI,
-and adds factory orchestration. See [upstream attribution](docs/upstream.md).
+ESF began as an independent fork of
+[Machinist](https://github.com/owainlewis/machinist) by Owain Lewis. The
+inherited CLI, local control plane and web UI were removed in 0.6.2; the
+factory is now the only product surface. See [upstream history](docs/upstream.md).
 
 ## Features
 
 - Named, operator-configured agent harnesses and repository policies.
-- Opt-in [Harness2 improvement](docs/harness-improvement.md) with immutable
-  instructional profiles, bounded experiments, and reviewed promotion.
 - Opt-in [Claude Code and Codex CLI agents](docs/harness-claude-codex.md)
   with stdin prompts and CubeEgress credential support.
 - Opt-in [Pi v1 harness candidate](docs/harness-pi.md) with bounded recovery
@@ -27,6 +26,9 @@ and adds factory orchestration. See [upstream attribution](docs/upstream.md).
 - Isolated execution in an existing CubeSandbox deployment.
 - Deterministic verification gates; agent success alone is not factory success.
 - Durable patches, logs, manifests, and verified cleanup outcomes.
+- Read-only enterprise console (`factory console`): overview dashboard, dispatch
+  command composer, run evidence and patches, changes, review queue, security,
+  operations and redacted settings, with optional native TLS.
 - Temporal TLS/mTLS, API-key authentication, and optional encrypted payloads.
 - Bounded execution, cancellation, and recovery after a lost create response.
 - Defense in depth at execution time: a measured egress boundary, a behavior
@@ -36,12 +38,15 @@ and adds factory orchestration. See [upstream attribution](docs/upstream.md).
 This is actively developed software. Review the [validated behavior and
 operational requirements](docs/production-readiness.md) before deployment.
 ESF produces changes for review; it does not decide what ships.
-ESF 0.6.2 is a release candidate. The
-[component upgrade record](release/qualification/component-upgrade-2026-10-14.md)
-records its local validation. Production qualification requires a matching,
-attested companion manifest for its exact source and asset digests. The
-[release procedure](docs/release-v0.6.2.md) and
-[review record](docs/review-v0.6.0.md) track the remaining gates.
+ESF 1.0.0-rc.1 is the first release candidate of 1.0.0: a production-oriented candidate, not
+a production qualification. It removes the experimental Harness2 improvement
+proof of concept, so an existing installation must drop that configuration
+before upgrading. The enterprise console and production-TLS work build on the
+[latest component refresh record](release/qualification/component-upgrade-2026-11-04.md).
+Production qualification requires a matching, attested companion manifest for
+its exact source and asset digests. The
+[1.0.0-rc.1 release notes](docs/release-v1.0.0-rc.1.md) record the changes,
+migration steps, security validation and outstanding GA gates.
 
 > **Upgrading:** the factory now refuses to start when an egress policy leaves
 > public internet possible unless you set `hardening.acknowledge_open_egress =
@@ -50,10 +55,10 @@ attested companion manifest for its exact source and asset digests. The
 
 ## Quick start
 
-Requirements for v0.6.2 development: Go 1.27.3, Node.js 26.12.0, Git,
-an existing CubeSandbox deployment with a READY template, and Temporal.
-Python tools use the frozen `uv.lock`; they are optional. Docker Compose can
-run the included local Temporal stack.
+Requirements for v1.0.0-rc.1 development: Go 1.27.3, Node.js 26.13.0 (console,
+agent and Pi packaging), Git, an existing CubeSandbox 0.7.3 deployment with a
+READY template, and Temporal. Python tools use the frozen `uv.lock`; they are
+optional. Docker Compose can run the included local Temporal stack.
 
 ```sh
 git clone https://github.com/mitkox/esf.git
@@ -70,10 +75,10 @@ The example uses placeholder production endpoints and paths. Set these to
 your actual TLS-protected Cube and Temporal services, or loopback development
 services, before running `factory config validate`.
 
-The installer selects the factory archive by default. The console and
-managed worker use the separate Machinist archive or the optional combined
-archive. Install pinned agent binaries separately with
-`scripts/install-agents.sh`; `factory agents verify` checks configured digests.
+The installer selects factory-only binary archives. Install pinned agent
+binaries separately with `scripts/install-agents.sh`; `factory agents verify`
+checks configured digests. The intake and Cube-template container images are
+built and qualified separately.
 
 For local Temporal:
 
@@ -121,23 +126,42 @@ A run can also be submitted from a reviewed manifest:
 ./bin/factory apply -f run.toml
 ```
 
-Build the inherited CLI separately with
-`go build -trimpath -o bin/machinist ./cmd/machinist`, then run
-`./bin/machinist init`.
-Machinist now supports staged workflows, review gates, shared artifacts, and
-final-message summaries. See [workflow guidance](docs/workflows.md).
+## Factory console
+
+The read-only operator console is embedded in the factory binary and reads the
+same durable evidence as the CLI. It never submits runs or approves reviews.
+
+```sh
+# Build the SPA once (Node.js), then the factory binary with it embedded:
+make console-build
+
+# Generate a read token (0600) and serve over HTTPS on loopback:
+openssl rand -hex 32 > ~/.config/esf/console.token
+chmod 600 ~/.config/esf/console.token
+./bin/factory console \
+  --listen 127.0.0.1:8443 \
+  --read-token-file ~/.config/esf/console.token \
+  --tls-cert-file ~/.config/esf/tls/console.crt \
+  --tls-key-file ~/.config/esf/tls/console.key
+```
+
+Open `https://127.0.0.1:8443`, or terminate TLS in a reverse proxy such as
+nginx or Tailscale. See the [console guide](docs/console.md) for tokens, TLS,
+reverse-proxy examples, throttling and operator workflows.
 
 ## Documentation
 
 | Guide | Purpose |
 | --- | --- |
 | [Factory overview](docs/FACTORY.md) | Workflow and components |
+| [Factory console](docs/console.md) | Read-only operator dashboard: screens, tokens, TLS and deployment |
 | [Operator guide](docs/operator-guide.md) | Harnesses, verification and troubleshooting |
 | [DSPy/Jev intake](docs/production-deployment.md#optional-dspyjev-intake-advisory) | Optional typed task advice and secure TypeSafe credential setup |
 | [DSPy brief lab](tools/brief_lab/README.md) | Offline, evidence-scored implementation brief experiments |
 | [Production deployment](docs/production-deployment.md) | Service setup, TLS, encryption and recovery |
 | [Readiness review](docs/production-readiness.md) | Validation and operational requirements |
-| [Machinist documentation](docs/README.md) | Inherited CLI and control plane |
+| [1.0.0-rc.1 release notes](docs/release-v1.0.0-rc.1.md) | Release-candidate status, Harness2 removal and migration, security validation, GA gates |
+| [Documentation index](docs/README.md) | All guides, harnesses and design records |
 | [Architecture decisions](docs/adr/) | Design rationale |
 
 ## Development
@@ -145,7 +169,6 @@ final-message summaries. See [workflow guidance](docs/workflows.md).
 ```sh
 make lint
 make test
-make frontend
 go test -race ./...
 ```
 
@@ -155,4 +178,5 @@ Report vulnerabilities privately through [SECURITY.md](SECURITY.md).
 
 ## License
 
-[MIT](LICENSE). Original Machinist copyright and attribution are preserved.
+[MIT](LICENSE). Original Machinist copyright and attribution are retained in the
+license and [docs/upstream.md](docs/upstream.md).

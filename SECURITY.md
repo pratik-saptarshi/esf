@@ -9,38 +9,44 @@ not open public issues for unpatched vulnerabilities.
 
 ## Supported versions
 
-ESF is under active development. Only the latest release and the latest
-commit on `master` receive security fixes. Go 1.27.3 is the pinned supported
-toolchain. Dependency and toolchain minimums may increase when a security fix
-requires it.
+ESF is under active development. Security fixes apply to the latest release —
+currently the ESF 1.0.0 release-candidate line, `1.0.0-rc.1` — and to the latest commit on
+`master`. Earlier 0.7.x and 0.6.x releases are historical and unsupported. Go
+1.27.3 is the pinned supported toolchain. Dependency and toolchain minimums may
+increase when a security fix requires it.
 
 ## Trust model
 
-Machinist runs configured coding commands with the operating-system permissions,
-tools, environment, and credentials of the worker host user. Command prompts,
-executor commands, repository mappings, and worker configuration are trusted
-operator policy. A submitted work prompt is untrusted input, but the selected
-command can still act on it using every capability available to its process.
+The factory worker enforces repository policy for CLI and direct workflow
+submissions. Remote URLs must match the operator allowlist. `--local-path`
+accepts only an exact canonical repository directory registered in
+`repositories.local_paths`; local sources are disabled when that list is empty.
+Registration is checked again before the worker reads or bundles host content.
+It does not grant access to descendants, adjacent paths or symlink aliases.
+Registered repositories, their parent directories and Git metadata must remain
+under operator control. A local source exports all repository refs into Cube,
+so only register repositories whose full history may be disclosed to the task.
+Task submissions cannot supply an executable or redefine operator resources.
+Operator configuration declares the repositories, harnesses, templates,
+verification profiles, resource limits and egress policy. Task text and
+repository content are untrusted.
 
-The control plane binds only to loopback. Browser requests use a random CSRF
-token, while CLI and worker requests use a shared bearer token. A managed worker
-may connect to a non-loopback control plane only over HTTPS. Do not expose the
-control plane through an untrusted proxy or network boundary.
-
-Repository mappings constrain Machinist assignment and path resolution. They do
-not sandbox a command from other files or tools available to the worker OS user.
-Use OS permissions, repository permissions, and narrowly scoped credentials to
-enforce capability boundaries.
+Coding agents run inside dedicated CubeSandbox microVMs. Repository mappings and
+harness allowlists constrain *assignment*; they are not a sandbox. Isolation,
+credential injection and egress control are enforced around the microVM and by
+the provider, not by trusting the agent process.
 
 ## Local data
 
-Machinist state defaults to `~/.machinist`. Protect this directory because it
-may contain task prompts, command output, control-plane state, bearer tokens,
-repository paths, and unpublished work. Configuration and token files should
-remain readable only by the worker host user.
-
-Provider CLIs own their credentials. Machinist does not request or persist
+Factory state defaults to `.factory/` in the selected workspace. It can contain
+task prompts, patches, command output, run manifests, review notes, audit
+records and credentials staged by the operator. Protect the evidence tree and
+`factory.toml`; keep credentials in narrowly scoped, owner-only files outside
+Git. Provider CLIs own their credentials; ESF does not request or persist
 provider API tokens.
+
+The inherited Machinist control plane, browser UI and `~/.machinist` state were
+removed in 0.6.2. They are no longer part of the supported attack surface.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the implemented security boundaries.
 
@@ -49,6 +55,9 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the implemented security boundaries.
 The factory runs coding agents in CubeSandbox microVMs. Temporal authentication,
 encrypted workflow payloads, evidence storage, credential provisioning and
 operational boundaries are described in [the deployment guide](docs/production-deployment.md).
+Per-release security validation, including the zero Critical/High requirement for
+ESF product artifacts and the recorded inherited platform risks, is summarized in
+the [1.0.0-rc.1 release notes](docs/release-v1.0.0-rc.1.md#security-validation).
 
 Candidate source, task prompts and evidence can contain unpublished work even
 when they contain no detected credentials. Keep the database, object store,
